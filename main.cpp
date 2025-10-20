@@ -1,17 +1,20 @@
 #include <stdio.h>
 #include <cstdint>
+#include <cmath>
 #include <limits>
 #include <vector>
 #include <unordered_map>
 
 using namespace std;
 
+enum class Relation { LEQ, EQ, GEQ }; // <= (LEQ), = (EQ), >= (GEQ)
+
 template <typename K, typename V>
 bool mapHasKey(const unordered_map<K, V>& m, const K& key) {
 	return m.find(key) != m.end(); // 如果 unordered_map 存在某個 key, 則回傳 value, 否則回傳 defaultValue
 }
 
-struct VarBimap { // 變數名稱與 x_j 的雙向映射
+struct VarBimap { // 變數名稱與 x_j 的雙向映射 (全域, 唯一)
 	unordered_map<string, uint32_t> strToIndex;
 	unordered_map<uint32_t, string> indexToStr;
 	
@@ -34,10 +37,8 @@ struct VarBimap { // 變數名稱與 x_j 的雙向映射
 	}
 } bimap;
 
-enum class Relation { LEQ, EQ, GEQ }; // <= (LEQ), = (EQ), >= (GEQ)
-
 class Linearform { // 線性函數
-private:
+protected:
 	unordered_map<uint32_t, double> form; // x_j index 映射到係數
 
 public: // 有做 chaining
@@ -46,12 +47,17 @@ public: // 有做 chaining
 		return *this;
 	}
 	
-	void print() { // debug
+	void negate() { // 對這個線性函數 *-1
+		for (auto& term: form) term.second = -term.second; // 對所有係數變號
+	}
+	
+	void print(bool endl = true) { // debug
 		uint32_t c = 0;
 		for (uint32_t i = 0; i < bimap.getVarCount(); i++) if (mapHasKey<uint32_t, double>(form, i)) {
 			if (c++) printf(" + ");
 			printf("%.2f[%s]", form[i], bimap.getVarName(i).c_str());
 		}
+		if (endl) printf("\n");
 	}
 };
 
@@ -86,27 +92,87 @@ public: // 有做 chaining
 		return *this;
 	}
 	
-	void print() { // debug
-		Linearform::print();
+	void stdOfNegativeRightConst() { // 對負的右側常數進行標準化
+		if (rightConst >= 0) return; // 若右側常數 >= 0, 無視此操作
+		
+		rightConst = -rightConst; // 對右側常數變號
+		negate(); // 對所有係數變號
+		
+		if (relation == Relation::LEQ) relation = Relation::GEQ; // 兩側變號需要將 <= 和 >= 轉向
+		else if (relation == Relation::GEQ) relation = Relation::LEQ;
+	}
+	
+	bool stdOfInequality() { // 對不等式進行標準化, 注意: 會回傳 "是否會產生 slack var"
+		const uint32_t slackVarIndex = bimap.getVarCount(); // 用於產生一個獨立的 slack var name 用於註冊
+		if (relation == Relation::LEQ) term(1, "@slk-var-" + to_string(slackVarIndex)); // "... <= r" -> "... + x = r"
+		if (relation == Relation::GEQ) term(-1, "@slk-var-" + to_string(slackVarIndex)); // "... >= r" -> "... - x = r"
+		
+		const bool haveSlackVar = relation == Relation::LEQ; // 只有 <= 才會產生 slack var
+		relation = Relation::EQ; // 這一步只是形式上的, 不影響後續演算法的正確性
+		return haveSlackVar;
+	}
+	
+	void print(bool endl = true) { // debug
+		Linearform::print(false);
 		if (relation == Relation::LEQ) printf(" <= ");
 		else if (relation == Relation::EQ) printf(" = ");
 		else if (relation == Relation::GEQ) printf(" >= ");
 		printf("%.2f", rightConst);
+		if (endl) printf("\n");
 	}
 };
 
 class LinearProgramming { // LP
+private:
+	bool isMax; // max -> true, min -> false
+	bool isFlip = false; // 如果 min 有被翻轉成 max 過
+	Linearform objectiveFunction; // 目標函數
+	vector<Constraint> multiCon; // 多個約束
+	vector<uint32_t> rowIndexWithoutSlackVar; // 不存在 slack var 的列編號, 注意: 會從 1 開始數, 因為第 0 列是目標函數
+	
+	void stdOfMinMax() { // 透過變號操作將 min LP 轉為 max LP, isFlip 會保留 min/max 資訊
+		if (!isMax) {
+			objectiveFunction.negate();
+			isMax = true;
+			isFlip = true;
+		}
+	}
+
 public:
-	LinearProgramming(bool isMax, Linearform objectiveFunction) {
-		
+	LinearProgramming(bool isMax, Linearform& objectiveFunction) { // 宣告 LP 問題的 max/min 和 目標函數
+		this->isMax = isMax;
+		this->objectiveFunction = objectiveFunction;
+	}
+	
+	LinearProgramming& addCon(Constraint& con) { // 添加約束 (chaining)
+		multiCon.push_back(con);
+		return *this;
+	}
+	
+	void std() { // 開始執行標準化, 不等式會被修改
+		for (size_t i = 0; i < multiCon.size(); i++) {
+			multiCon[i].stdOfNegativeRightConst(); // 對負的右側常數進行標準化
+			if (!multiCon[i].stdOfInequality()) rowIndexWithoutSlackVar.push_back(i + 1); // 不存在 slack var 的列編號, 注意: 會從 1 開始數
+		}
+		stdOfMinMax(); // 透過變號操作將 min LP 轉為 max LP, isFlip 會保留 min/max 資訊
+	}
+	
+	void print() { // debug
+		printf(isMax ? "max " : "min ");
+		objectiveFunction.print();
+		for (Constraint& con: multiCon) con.print();
 	}
 };
 
-int main() {
-	numeric_limits<double>::infinity();
+int32_t main() {
+	LinearProgramming lp = LinearProgramming(false, Linearform().term(1, "x").term(1, "y"))
+		.addCon(Constraint().term(4, "x").term(3, "y").leq(17))
+		.addCon(Constraint().term(2, "x").term(-5, "y").geq(-9))
+		.addCon(Constraint().term(1, "x").term(10, "y").geq(25));
 	
-	Linearform().term(3, "x").term(0.1, "y").term(-2.33, "1z66A").print(); printf("\n");
-	Constraint().term(3, "x").term(0, "y").term(-2.33, "z").geq(4.5).print(); printf("\n");
+	lp.print();
+	lp.std();
+	lp.print();
 	
 	return 0;
 }
