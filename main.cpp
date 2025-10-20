@@ -17,6 +17,8 @@ bool mapHasKey(const unordered_map<K, V>& m, const K& key) {
 struct VarBimap { // 變數名稱與 x_j 的雙向映射 (全域, 唯一)
 	unordered_map<string, uint32_t> strToIndex;
 	unordered_map<uint32_t, string> indexToStr;
+	uint32_t slackVarCount = 0; // slack var 個數
+	uint32_t artificialVarCount = 0; // artificial var 個數
 	
 	uint32_t getVarCount() { // 獲取已註冊變數的數量
 		return strToIndex.size();
@@ -35,6 +37,18 @@ struct VarBimap { // 變數名稱與 x_j 的雙向映射 (全域, 唯一)
 		if (mapHasKey<uint32_t, string>(indexToStr, varIndex)) return indexToStr[varIndex];
 		return "[unknown-var]";
 	}
+	
+	string createSlackVar() { // 註冊一個 slack var, 並回傳 name & index
+		const string varName = "@slk-" + to_string(++slackVarCount); // 產生一個獨立的 slack var name
+		const uint32_t varIndex = getVarIndex(varName); // 註冊, 並獲取 var index
+		return varName;
+	}
+	
+	string createArtificialVar() { // 註冊一個 artificial var, 並回傳 name & index
+		const string varName = "@art-" + to_string(++artificialVarCount); // 產生一個獨立的 slack var name
+		const uint32_t varIndex = getVarIndex(varName); // 註冊, 並獲取 var index
+		return varName;
+	}
 } bimap;
 
 class Linearform { // 線性函數
@@ -51,20 +65,20 @@ public: // 有做 chaining
 		for (auto& term: form) term.second = -term.second; // 對所有係數變號
 	}
 	
-	void print(bool endl = true) { // debug
+	void print(bool addNewLine = true) { // debug
 		uint32_t c = 0;
 		for (uint32_t i = 0; i < bimap.getVarCount(); i++) if (mapHasKey<uint32_t, double>(form, i)) {
 			if (c++) printf(" + ");
 			printf("%.2f[%s]", form[i], bimap.getVarName(i).c_str());
 		}
-		if (endl) printf("\n");
+		if (addNewLine) printf("\n");
 	}
 };
 
 class Constraint: public Linearform { // 約束. 由一個線性函數, 關係, 和右側常數組成: c1 x1 + c2 x2 + ... ~ r
 private:
-	Relation relation; // >= or = or <=
 	double rightConst; // 右側常數
+	Relation relation; // >= or = or <=
 	
 	void set(Relation relation, double rightConst) { // leq, eq, geq 共用的 set 邏輯
 		this->relation = relation;
@@ -93,7 +107,7 @@ public: // 有做 chaining
 	}
 	
 	void stdOfNegativeRightConst() { // 對負的右側常數進行標準化
-		if (rightConst >= 0) return; // 若右側常數 >= 0, 無視此操作
+		if (rightConst >= 0) return; // 若右側常數 >= 0, 跳過這一步
 		
 		rightConst = -rightConst; // 對右側常數變號
 		negate(); // 對所有係數變號
@@ -102,23 +116,25 @@ public: // 有做 chaining
 		else if (relation == Relation::GEQ) relation = Relation::LEQ;
 	}
 	
-	bool stdOfInequality() { // 對不等式進行標準化, 注意: 會回傳 "是否會產生 slack var"
-		const uint32_t slackVarIndex = bimap.getVarCount(); // 用於產生一個獨立的 slack var name 用於註冊
-		if (relation == Relation::LEQ) term(1, "@slk-var-" + to_string(slackVarIndex)); // "... <= r" -> "... + x = r"
-		if (relation == Relation::GEQ) term(-1, "@slk-var-" + to_string(slackVarIndex)); // "... >= r" -> "... - x = r"
+	int32_t stdOfInequality() { // 對不等式進行標準化, 若 slack var 係數 = 1 則回傳 var index, 否則回傳 -1 (代表要添加 arti-var)
+		if (relation == Relation::EQ) return -1; // "=" 不用添加 slack var
 		
-		const bool haveSlackVar = relation == Relation::LEQ; // 只有 <= 才會產生 slack var
+		const string slackVarName = bimap.createSlackVar(); // 產生一個獨立的 slack var name
+		if (relation == Relation::LEQ) term(1, slackVarName); // "... <= r" -> "... + x = r"
+		if (relation == Relation::GEQ) term(-1, slackVarName); // "... >= r" -> "... - x = r"
+		
+		const int32_t slackVarIndex = (relation == Relation::LEQ) ? bimap.getVarIndex(slackVarName) : -1; // 只有 <= 的 slack var 係數 = 1
 		relation = Relation::EQ; // 這一步只是形式上的, 不影響後續演算法的正確性
-		return haveSlackVar;
+		return slackVarIndex;
 	}
 	
-	void print(bool endl = true) { // debug
+	void print(bool addNewLine = true) { // debug
 		Linearform::print(false);
 		if (relation == Relation::LEQ) printf(" <= ");
 		else if (relation == Relation::EQ) printf(" = ");
 		else if (relation == Relation::GEQ) printf(" >= ");
 		printf("%.2f", rightConst);
-		if (endl) printf("\n");
+		if (addNewLine) printf("\n");
 	}
 };
 
@@ -128,7 +144,7 @@ private:
 	bool isFlip = false; // 如果 min 有被翻轉成 max 過
 	Linearform objectiveFunction; // 目標函數
 	vector<Constraint> multiCon; // 多個約束
-	vector<uint32_t> rowIndexWithoutSlackVar; // 不存在 slack var 的列編號, 注意: 會從 1 開始數, 因為第 0 列是目標函數
+	vector<int32_t> baseVarIndexs; // 基底, 多個 x_j = ... 的編號 j, 在執行 .std 之前是空的
 	
 	void stdOfMinMax() { // 透過變號操作將 min LP 轉為 max LP, isFlip 會保留 min/max 資訊
 		if (!isMax) {
@@ -136,6 +152,20 @@ private:
 			isMax = true;
 			isFlip = true;
 		}
+	}
+	
+	void stdOfInfeasible() { // slack var 不足以形成基底, 需要添加額外的 artificial var
+		Linearform minObjFunc; // 因為要找出一個最小的起始向量, 這邊會從求 max 改為求 min
+		for (size_t i = 0; i < baseVarIndexs.size(); i++) if (baseVarIndexs[i] == -1) { // 如果編號為 -1 代表要添加 artificial var
+			const string artificialVarName = bimap.createArtificialVar(); // 產生一個獨立的 artificial var name
+			multiCon[i].term(1, artificialVarName); // 添加一個 artificial var 作為暫時性基底
+			minObjFunc.term(1, artificialVarName); // 在 minimum function 也添加 artificial var
+			baseVarIndexs[i] = bimap.getVarIndex(artificialVarName); // 紀錄 artificial var 的基底
+		}
+		
+		if (bimap.artificialVarCount == 0) return; // 若 slack var 足夠, 跳過這一步
+		
+		// 轉 array
 	}
 
 public:
@@ -150,11 +180,12 @@ public:
 	}
 	
 	void std() { // 開始執行標準化, 不等式會被修改
-		for (size_t i = 0; i < multiCon.size(); i++) {
-			multiCon[i].stdOfNegativeRightConst(); // 對負的右側常數進行標準化
-			if (!multiCon[i].stdOfInequality()) rowIndexWithoutSlackVar.push_back(i + 1); // 不存在 slack var 的列編號, 注意: 會從 1 開始數
+		for (Constraint& con: multiCon) {
+			con.stdOfNegativeRightConst(); // 對負的右側常數進行標準化
+			baseVarIndexs.push_back(con.stdOfInequality()); // 不存在 slack var 的 con index (改為複寫 vector, 因為要記錄右下向量)
 		}
 		stdOfMinMax(); // 透過變號操作將 min LP 轉為 max LP, isFlip 會保留 min/max 資訊
+		stdOfInfeasible(); // slack var 不足以形成基底, 需要添加額外的 artificial var
 	}
 	
 	void print() { // debug
