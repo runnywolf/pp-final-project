@@ -170,34 +170,57 @@ private:
 		}
 	} tableau;
 	
-	void setTableauRow(uint32_t rowIndex, Constraint con, uint32_t& slackVarColIndex) { // 將一個約束加入到 tableau, 注意: slackVarColIndex 會被修改
-		for (auto& [varIndex, coef]: con.getLinearform()) tableau(rowIndex, varIndex) = coef; // 填入一般變數
-		
-		if (con.haveSlackVar()) tableau(rowIndex, slackVarColIndex++) = con.getSlackVarCoef(); // 如果有 slack var, 需要添加係數 1 或 -1 到 tableau 內
-		
-		tableau(rowIndex, tableau.cols - 1) = con.getRightConst(); // 在列的最右元素, 設定右側常數 (基底的值)
-		tableau.baseVarIndexs[rowIndex] = con.haveArtificialVar() ? -2 : -1; // -1 代表 slack var, -2 代表 artifical var
-	}
-
-public:
-	LP(bool isMin, Linearform& objFunc, vector<Constraint>& multiCon, uint32_t varCount) {
-		// TODO: 變數範圍應該傳入一個 tree node, 通過回溯祖先得到一串變數範圍 
-		vector<Constraint> varRangeMultiCon = { Constraint().add(1, 0).geq(1) }; // 將變數範圍轉為多個約束
-		
-		// init tableau
-		uint32_t slackVarCount = 0; // 計算 slack var 個數, 決定運算矩陣的 col 數 (因為要分配連續記憶體)
+	bool isMin; // min/max
+	Linearform& objFunc; // 目標函數
+	vector<Constraint>& multiCon; // 多個約束
+	uint32_t varCount; // 一般變數的個數
+	vector<Constraint> varRangeMultiCon; // 將變數範圍轉為多個約束
+	
+	void initTableau() { // init tableau
+		uint32_t slackVarCount = 0; // 計算 slack var 個數, 決定 tableau 的 col 數 (因為要分配連續記憶體)
 		for (Constraint& con: multiCon) if (con.haveSlackVar()) slackVarCount++;
 		for (Constraint& con: varRangeMultiCon) if (con.haveSlackVar()) slackVarCount++;
 		tableau.init(1 + multiCon.size() + varRangeMultiCon.size(), varCount + slackVarCount + 1); // init tableau
-		
-		// insert constraint into tableau
+	}
+	
+	void insertConToTableau() { // 將約束插入 tableau
 		uint32_t rowIndex = 1;
-		uint32_t slackVarColIndex = varCount; // 因為一般變數的 col index 為 0 ~ varCount-1
-		for (Constraint& con: multiCon) setTableauRow(rowIndex++, con, slackVarColIndex);
-		for (Constraint& con: varRangeMultiCon) setTableauRow(rowIndex++, con, slackVarColIndex);
+		uint32_t slackVarColIndex = varCount; // 因為一般變數的 col index 為 0 ~ varCount-1, 所以 slack var 插入的 col index 從這裡開始數
+		auto setTableauRow = [&](Constraint con) { // 將一個約束加入到 tableau
+			for (auto& [varIndex, coef]: con.getLinearform()) tableau(rowIndex, varIndex) = coef; // 填入一般變數
+			
+			if (con.haveSlackVar()) tableau(rowIndex, slackVarColIndex++) = con.getSlackVarCoef(); // 如果有 slack var, 需要添加係數 1 或 -1 到 tableau 內
+			
+			tableau(rowIndex, tableau.cols - 1) = con.getRightConst(); // 在列的最右元素, 設定右側常數 (基底的值)
+			tableau.baseVarIndexs[rowIndex] = con.haveArtificialVar() ? -2 : -1; // -1 代表 slack var, -2 代表 artifical var
+			
+			rowIndex++;
+		};
+		for (Constraint& con: multiCon) setTableauRow(con);
+		for (Constraint& con: varRangeMultiCon) setTableauRow(con);
+	}
+	
+	void handlingInfeasible() { // 檢查是否無解
+		bool haveArtificialVar = false;
+		for (Constraint& con: multiCon) if (con.haveArtificialVar()) haveArtificialVar = true;
+		for (Constraint& con: varRangeMultiCon) if (con.haveArtificialVar()) haveArtificialVar = true;
+		if (!haveArtificialVar) return; // 如果不存在 artificial var, 跳過這一步
 		
-		// handling infeasible LP
+		// todo
+	}
+	
+	void runMinSimplexMethod() { // 對 tableau 執行 min simplex method
 		
+	}
+
+public:
+	LP(bool isMin, Linearform& objFunc, vector<Constraint>& multiCon, uint32_t varCount)
+	: isMin(isMin), objFunc(objFunc), multiCon(multiCon), varCount(varCount) {
+		// TODO: 變數範圍應該傳入一個 tree node, 通過回溯祖先得到一串變數範圍 
+		varRangeMultiCon = { Constraint().add(1, 0).geq(1) }; // 將變數範圍轉為多個約束
+		initTableau(); // init tableau
+		insertConToTableau();  // 將約束插入 tableau
+		handlingInfeasible(); // 檢查是否無解
 		
 		tableau.print();
 	}
