@@ -14,9 +14,9 @@ bool mapHasKey(const unordered_map<K, V>& m, const K& key) {
 	return m.find(key) != m.end(); // 如果 unordered_map 存在某個 key, 則回傳 value, 否則回傳 defaultValue
 }
 
-struct VarBimap { // 變數名稱與 x_j 的雙向映射 (全域, 唯一)
+struct VarBimap { // 變數名稱與 x_j 的雙向映射
 	unordered_map<string, uint32_t> strToIndex;
-	unordered_map<uint32_t, string> indexToStr;
+	vector<string> indexToStr;
 	uint32_t slackVarCount = 0; // slack var 個數
 	uint32_t artificialVarCount = 0; // artificial var 個數
 	
@@ -29,12 +29,12 @@ struct VarBimap { // 變數名稱與 x_j 的雙向映射 (全域, 唯一)
 		
 		const uint32_t newVarIndex = getVarCount(); // 如果字串變數沒有註冊過, 分配編號 0, 1, 2, ...
 		strToIndex[varName] = newVarIndex; // 註冊雙向映射
-		indexToStr[newVarIndex] = varName;
+		indexToStr.push_back(varName);
 		return newVarIndex; // 回傳分配的新編號
 	}
 	
 	string getVarName(uint32_t varIndex) { // 編號 j (x_j) 轉字串變數
-		if (mapHasKey<uint32_t, string>(indexToStr, varIndex)) return indexToStr[varIndex];
+		if (varIndex <= indexToStr.size() - 1) return indexToStr[varIndex];
 		return "[unknown-var]";
 	}
 	
@@ -56,7 +56,7 @@ protected:
 	unordered_map<uint32_t, double> form; // x_j index 映射到係數
 
 public: // 有做 chaining
-	Linearform& term(double coef, const string& varName) { // 添加一個未知數項, 變數名可以是任何字串
+	Linearform& term(double coef, const string& varName) { // [改 add] 添加一個未知數項, 變數名可以是任何字串
 		if (coef != 0) form[bimap.getVarIndex(varName)] = coef; // 為字串變數分配一個 x_j index, 然後 map 到係數
 		return *this;
 	}
@@ -164,6 +164,7 @@ private:
 		}
 		
 		if (bimap.artificialVarCount == 0) return; // 若 slack var 足夠, 跳過這一步
+		
 		
 		// 轉 array
 	}
