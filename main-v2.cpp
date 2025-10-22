@@ -156,7 +156,7 @@ private:
 	public:
 		uint32_t rows; // row 數
 		uint32_t cols; // col 數
-		vector<int32_t> baseVarIndexs; // 基底變數的編號, -1 代表 slack var, -2 代表 artifical var
+		vector<int32_t> baseVarIndexs; // 基底變數的編號, -1 代表 artifical var
 		
 		double& operator()(uint32_t i, uint32_t j) { // 訪問扁平化的二維陣列
 			return arr[cols * i + j];
@@ -220,7 +220,7 @@ private:
 	}
 	
 	bool isTableauHaveArtificialVar() { // tableau 的基底是否含有 artificial var
-		for (uint32_t i = 1; i < tableau.rows; i++) if (tableau.baseVarIndexs[i] == -2) return true;
+		for (uint32_t i = 1; i < tableau.rows; i++) if (tableau.baseVarIndexs[i] == -1) return true;
 		return false;
 	}
 	
@@ -246,8 +246,7 @@ private:
 			
 			tableau.elimination(rowIndex, newBaseVarIndex); // 對新基底的行做消元, 只留下最小正數比值的列
 			
-			if (newBaseVarIndex <= varCount - 1) tableau.baseVarIndexs[rowIndex] = newBaseVarIndex; // 更改新基底編號 0 ~ varCount-1
-			else tableau.baseVarIndexs[rowIndex] = -1; // 如果新基底編號 >= varCount, 代表這個新基底是 slack var, 設為 -1 (因為 slack var index 不重要)
+			tableau.baseVarIndexs[rowIndex] = newBaseVarIndex; // 更改新基底編號
 		}
 		
 		if (isTableauHaveArtificialVar()) return false; // 執行完 simplex method, 若最小的 L1-norm 起始向量包含 artificial var, 則 LP 問題無解
@@ -263,14 +262,14 @@ private:
 	
 	void insertConToTableau() { // 將約束插入 tableau
 		uint32_t rowIndex = 1;
-		uint32_t slackVarColIndex = varCount; // 因為一般變數的 col index 為 0 ~ varCount-1, 所以 slack var 插入的 col index 從這裡開始數
+		uint32_t slackVarColIndex = varCount - 1; // 因為一般變數的 col index 為 0 ~ varCount-1, 所以 slack var 插入的 col index 從這裡開始數
 		auto setTableauRow = [&](Constraint con) { // 將一個約束加入到 tableau
 			for (auto& [varIndex, coef]: con.getTerms()) tableau(rowIndex, varIndex) = coef; // 填入一般變數
 			
-			if (con.haveSlackVar()) tableau(rowIndex, slackVarColIndex++) = con.getSlackVarCoef(); // 如果有 slack var, 需要添加係數 1 或 -1 到 tableau 內
+			if (con.haveSlackVar()) tableau(rowIndex, ++slackVarColIndex) = con.getSlackVarCoef(); // 如果有 slack var, 需要添加係數 1 或 -1 到 tableau 內
 			
 			tableau(rowIndex, tableau.cols - 1) = con.getRightConst(); // 在列的最右元素, 設定右側常數 (基底的值)
-			tableau.baseVarIndexs[rowIndex] = con.haveArtificialVar() ? -2 : -1; // -1 代表 slack var, -2 代表 artifical var
+			tableau.baseVarIndexs[rowIndex] = con.haveArtificialVar() ? -1 : slackVarColIndex; // -1 代表 artifical var
 			
 			rowIndex++;
 		};
@@ -281,7 +280,7 @@ private:
 	bool handlingInfeasible() { // 檢查是否無解, 並做處理, 若無解則回傳 false, 非無解則回傳 true
 		if (!isTableauHaveArtificialVar()) return true; // 如果不存在 artificial var, 跳過這一步
 		
-		for (uint32_t i = 1; i < tableau.rows; i++) if (tableau.baseVarIndexs[i] == -2) {
+		for (uint32_t i = 1; i < tableau.rows; i++) if (tableau.baseVarIndexs[i] == -1) {
 			tableau.addRowToRow(i, 0, 1); // 將 artificial var 的列加到第零列, 消去第零列的 art-var 係數 -1 (但我們的演算法不會儲存 art-var 的行係數)
 		}
 		
@@ -309,7 +308,7 @@ public:
 		} else { // handlingInfeasible 輸出 true, 可能為有解或無界. handlingInfeasible 已處理基底不足的問題
 			insertObjFuncToTableau(); // 將目標函數插入到 tableau 的第零列
 			
-			// TODO: 消去 row 0 的非零基底行元素 (phase-2). 若沒做 phase-1 則這一步不會有實際影響
+			tableau.baseVarIndexs; // TODO: 消去 row 0 的非零基底行元素 (phase-2). 若沒做 phase-1 則這一步不會有實際影響
 		}
 		
 		tableau.print();
