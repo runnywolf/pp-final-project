@@ -1,9 +1,10 @@
-#include <stdio.h>
-#include <cstdint>
+#include <stdio.h> // printf
+#include <cstdint> // uint32_t
 #include <cmath>
-#include <limits>
+#include <limits> // fp64 inf, nan
 #include <vector>
-#include <unordered_map>
+#include <unordered_map> // map
+#include <chrono> // 測速
 
 using namespace std;
 
@@ -319,9 +320,15 @@ private:
 	}
 
 public:
-	LP(bool isMin, Linearform& objFunc, vector<Constraint>& multiCon, uint32_t varCount)
-	: isMin(isMin), objFunc(objFunc), multiCon(multiCon), varCount(varCount) {
-		// varRangeMultiCon = { Constraint().add(1, 0).geq(1) }; // 將變數範圍轉為多個約束
+	LP(bool isMin, Linearform& objFunc, vector<Constraint>& multiCon, vector<pair<double, double>> varRange)
+	: isMin(isMin), objFunc(objFunc), multiCon(multiCon) {
+		varCount = varRange.size();
+		uint32_t i = 0;
+		for (auto& [varMin, varMax]: varRange) { // min <= x_i <= max, 將變數範圍轉為約束
+			if (varMin > 0) varRangeMultiCon.push_back(Constraint().add(1, i).geq(varMin)); // x_i >= min
+			if (!isinf(varMax)) varRangeMultiCon.push_back(Constraint().add(1, i).leq(varMax)); // x_i <= max
+			i++;
+		}
 		
 		initTableau(); // init tableau
 		insertConToTableau(); // 將約束插入 tableau
@@ -337,19 +344,33 @@ public:
 	}
 	
 	void print() { // debug
-		printf("Type: ");
+		VarBimap bimap; // 因為 IP 已經將字串變數轉為 index 跟 LP 溝通, 所以 LP 抽象層並不知道 varName, 所以這邊註冊一個 x0, x1, x2 (抽象 index)
+		for (uint32_t i = 0; i < varCount; i++) bimap.getVarIndex("x" + to_string(i)); // 註冊 x0, x1, x2, ...
+		
+		printf(isMin ? "min " : "max "); // 印出目標函數
+		objFunc.print(bimap);
+		for (Constraint& con: multiCon) con.print(bimap); // 印出約束
+		
+		if (varRangeMultiCon.size() == 0) printf("Var range is empty.");
+		for (Constraint& con: varRangeMultiCon) { // 印出變數範圍
+			con.print(bimap, false);
+			printf("; ");
+		}
+		printf("\n");
+		
+		printf("Type: "); // 印出 LP 的解的類型
 		if (solutionType == Type::BOUNDED) printf("Bounded\n");
 		else if (solutionType == Type::UNBOUNDED) printf("Unbounded\n");
 		else if (solutionType == Type::INFEASIBLE) printf("Infeasible\n");
 		
-		printf(isMin ? "Minimum = " : "Maximum = ");
+		printf(isMin ? "Minimum = " : "Maximum = "); // 印出極值
 		printf("%.2f\n", extremum);
 		
-		printf("Solution: ");
+		printf("Solution: "); // 印出解向量
 		for (size_t i = 0; i < solution.size(); i++) printf("x%d = %.2f; ", (int)i, solution[i]);
 		printf("\n");
 		
-		if (unboundedDirection.size() > 0) {
+		if (unboundedDirection.size() > 0) { // 如果無界, 印出方向向量
 			printf("Unbounded: ");
 			for (size_t i = 0; i < unboundedDirection.size(); i++) printf("x%d = %.2f; ", (int)i, unboundedDirection[i]);
 			printf("\n");
@@ -385,7 +406,7 @@ public:
 	}
 	
 	void test() { // test
-		LP(isMin, objFunc, multiCon, bimap.getVarCount()).print();
+		LP(isMin, objFunc, multiCon, {{ 0, FP64_INF }, { 0, FP64_INF }}).print();
 	}
 	
 	void print() { // debug
@@ -396,14 +417,84 @@ public:
 };
 
 class Tester { // 有一些範例用來測試正確性
+private:
+	void printTime(double t) { // print 一個時間 (輸入 ns)
+		if (t < 1e3) {
+			printf("%.f ns (1e-9 s)", t); return;
+		};
+		t /= 1e3;
+		
+		if (t < 1e3) {
+			printf("%.f us (1e-6 s)", t); return;
+		};
+		t /= 1e3;
+		
+		if (t < 1e3) {
+			printf("%.f ms (1e-3 s)", t); return;
+		};
+		t /= 1e3;
+		
+		printf("%.f s (1 s)", t);
+	}
 	
+	struct TestLP { // LP 的測資結構
+		bool isMin;
+		Linearform objFunc;
+		vector<Constraint> multiCon;
+		vector<pair<double, double>> varRange;
+	};
+	
+	vector<TestLP> lpTests = { // 所有 LP 的測資
+		{ // test 0: Bounded
+			false, Linearform().add(1, 0).add(1, 1),
+			{
+				Constraint().add(4, 0).add(3, 1).leq(17),
+				Constraint().add(2, 0).add(-5, 1).geq(-9),
+				Constraint().add(1, 0).add(10, 1).geq(25)
+			},
+			{ { 0, FP64_INF }, { 0, FP64_INF } }
+		},
+		{ // test 1: Infeasible
+			false, Linearform().add(1, 0).add(1, 1),
+			{
+				Constraint().add(4, 0).add(3, 1).leq(17),
+				Constraint().add(2, 0).add(-5, 1).geq(-9),
+				Constraint().add(1, 0).add(10, 1).geq(30)
+			},
+			{ { 0, FP64_INF }, { 0, FP64_INF } }
+		}
+	};
+
+public:
+	void testLp(uint32_t i) { // 測試 LP 的第 i 個側資, i = 0, 1, 2, ...
+		if (i >= lpTests.size()) return; // 越界
+		TestLP test = lpTests[i];
+		
+		auto start = chrono::high_resolution_clock::now(); // 測速
+		LP lp(test.isMin, test.objFunc, test.multiCon, test.varRange); // 計算 LP 問題
+		auto end = chrono::high_resolution_clock::now();
+		
+		printf("---------- test %d ----------\n", i);
+		lp.print(); // print 一些資訊
+		printf("Execution time: "); // LP 運算耗費的時間 (sec)
+		printTime(chrono::duration<double, nano>(end - start).count());
+		printf("\n\n");
+	}
+	
+	void testAllLp() { // 測試所有 LP 的測資
+		for (size_t i = 0; i < lpTests.size(); i++) testLp(i);
+	}
 };
 
 int32_t main() {
+	Tester tester;
+	tester.testLp(1);
+	
+	/*
 	IP("max", {{ 1, "x" }, { 1, "y" }})
 		.addConstraint({{ 4, "x" }, { 3, "y" }}, "<=", 17)
 		.addConstraint({{ 2, "x" }, { -5, "y" }}, ">=", -9)
 		.addConstraint({{ 1, "x" }, { 10, "y" }}, ">=", 25).test();
-	
+	*/
 	return 0;
 }
