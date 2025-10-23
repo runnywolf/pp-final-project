@@ -519,7 +519,7 @@ public:
 
 int32_t main() {
 	Tester tester;
-	tester.testLp(4);
+	tester.testAllLp();
 	
 	/*
 	IP("max", {{ 1, "x" }, { 1, "y" }})
