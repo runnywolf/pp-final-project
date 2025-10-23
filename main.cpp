@@ -1,6 +1,7 @@
 #include <stdio.h> // printf
 #include <cstdint> // uint32_t
 #include <cmath>
+#include <string>
 #include <limits> // fp64 inf, nan
 #include <vector>
 #include <unordered_map> // map
