@@ -1,9 +1,14 @@
 #include <stdio.h>
 #include <cstdint>
+#include <cmath>
+#include <limits>
 #include <vector>
 #include <unordered_map>
 
 using namespace std;
+
+const double FP64_INF = numeric_limits<double>::infinity();
+const double FP64_NAN = numeric_limits<double>::quiet_NaN();
 
 enum class Relation { LEQ, EQ, GEQ }; // <= (LEQ), = (EQ), >= (GEQ)
 
@@ -195,21 +200,24 @@ private:
 	bool isMin; // min/max
 	Linearform& objFunc; // 目標函數
 	vector<Constraint>& multiCon; // 多個約束
+	
 	uint32_t varCount; // 一般變數的個數, index 為 0 ~ varCount-1
 	vector<Constraint> varRangeMultiCon; // 將變數範圍轉為多個約束
 	
 	Type solutionType; // 解的狀態
-	// TODO: solution
+	vector<double> solution; // 解向量, 若無解會是空的
+	vector<double> unboundedDirection; // 若無界, 此值會是一個方向向量, 即使往無窮遠移動仍然滿足目標函數
+	double extremum; // min/max 極值
 	
 	int32_t findNewBaseVarIndex() { // 尋找一個新的基底變數, 若沒找到則回傳 -1
-		for (uint32_t j = 0; j <= tableau.cols - 2; j++) if (tableau(0, j) > EPS) return j; // 最後一列是基底常數, 不能進入
+		for (uint32_t j = 0; j <= tableau.cols - 2; j++) if (tableau(0, j) >= EPS) return j; // 最後一列是基底常數, 不能進入
 		return -1;
 	}
 	
 	int32_t findMinPosRatioRowIndex(uint32_t baseVarIndex) { // 選定要進入的基底後, 尋找一個 Aij / r 最小的正比值, 回傳這個值在第幾列, 找不到回傳 -1
 		double minPosRatio = 1e300; // 最小正比值: 右側常數/係數
 		int32_t minPosRatioRowIndex = -1; // 要更換基底的 row index, 若為 -1 代表沒有找到
-		for (uint32_t i = 1; i < tableau.rows; i++) if (tableau(i, baseVarIndex) > EPS) { // 要正比值
+		for (uint32_t i = 1; i < tableau.rows; i++) if (tableau(i, baseVarIndex) >= EPS) { // 要正比值
 			double ratio = tableau(i, tableau.cols - 1) / tableau(i, baseVarIndex);
 			if (ratio < minPosRatio) {
 				minPosRatio = ratio;
@@ -227,14 +235,12 @@ private:
 	void handleUnbound(uint32_t newBaseVarIndex) { // 若無界, 輸出當前向量和一個無限增長的方向向量 (這個向量集合仍然符合所有約束)
 		solutionType = Type::UNBOUNDED; // 無界
 		
+		extremum = isMin ? -FP64_INF : FP64_INF; // min -> -inf ; max -> inf
 		// TODO: unbound
 	}
 	
-	bool runMinSimplexMethod() { // 對 tableau 執行 min simplex method, 若有解回傳 true, 無解或無界回傳 false
+	bool runMinSimplexMethod() { // 對 tableau 執行 min simplex method, 若有界回傳 true, 無解或無界回傳 false
 		while (true) {
-			tableau.print(); // [debug]
-			printf("\n");
-			
 			const int32_t newBaseVarIndex = findNewBaseVarIndex(); // 嘗試尋找新基底
 			if (newBaseVarIndex == -1) break; // 若沒有找到可進入的基底, 跳出迴圈
 			
@@ -245,7 +251,6 @@ private:
 			}
 			
 			tableau.elimination(rowIndex, newBaseVarIndex); // 對新基底的行做消元, 只留下最小正數比值的列
-			
 			tableau.baseVarIndexs[rowIndex] = newBaseVarIndex; // 更改新基底編號
 		}
 		
@@ -277,7 +282,7 @@ private:
 		for (Constraint& con: varRangeMultiCon) setTableauRow(con);
 	}
 	
-	bool handlingInfeasible() { // 檢查是否無解, 並做處理, 若無解則回傳 false, 非無解則回傳 true
+	bool handleInfeasible() { // 檢查是否無解, 並做處理, 若無解則回傳 false, 非無解則回傳 true
 		if (!isTableauHaveArtificialVar()) return true; // 如果不存在 artificial var, 跳過這一步
 		
 		for (uint32_t i = 1; i < tableau.rows; i++) if (tableau.baseVarIndexs[i] == -1) {
@@ -287,31 +292,68 @@ private:
 		if (!runMinSimplexMethod()) return false; // 嘗試求出一個最小的 L1-norm 起始向量, 若無解則回傳 false
 		
 		for (uint32_t j = 0; j < tableau.cols; j++) tableau(0, j) = 0; // 雖然理論上第零列應該是全 0 的, 只是為了消除小誤差
-		return true; // 可能為有解或無界
+		return true; // 可能為有界或無界
 	}
 	
 	void insertObjFuncToTableau() { // 將目標函數插入到 tableau 的第零列
 		for (auto& [varIndex, coef]: objFunc.terms) tableau(0, varIndex) = coef * (isMin ? -1 : 1);
 	} // 此時 tableau 的第零列是空的, 填入目標函數. 注意: 因為將 max obj func 變號會轉為 min 問題, 所以 max 問題在這裡會填入 +coef 而不是 -coef
+	
+	void handleNonZeroHead() { // 處理 row 0 的非零基底行元素 (phase-2). 若沒做 phase-1 則這一步不會有實際影響
+		for (uint32_t i = 1; i < tableau.rows; i++) {
+			uint32_t baseVarIndex = tableau.baseVarIndexs[i]; // 檢查每一列對應的基底變數所對應的行的 row 0 元素是不是 0
+			if (abs(tableau(0, baseVarIndex)) >= EPS) tableau.addRowToRow(i, 0, -tableau(0, baseVarIndex)); // 如果非 0, 需要執行列運算, 消去它
+		} // 避免浮點誤差, 介於 +-EPS 內會視為 0
+	}
+	
+	void handleBound() { // 處理有界的情況
+		solutionType = Type::BOUNDED;
+		
+		solution = vector<double>(varCount, 0); // 空的解向量, 長度為一般變數的數目
+		for (uint32_t i = 1; i < tableau.rows; i++) {
+			uint32_t baseVarIndex = tableau.baseVarIndexs[i];
+			if (baseVarIndex <= varCount - 1) solution[baseVarIndex] = tableau(i, tableau.cols - 1); // 如果基底變數編號為 0 ~ varCount-1 代表為一般變數
+		} // slack var 編號 >= varCount, 所以不會出現在解向量裡
+		
+		extremum = tableau(0, tableau.cols - 1) * (isMin ? 1 : -1); // 極值
+	}
 
 public:
 	LP(bool isMin, Linearform& objFunc, vector<Constraint>& multiCon, uint32_t varCount)
 	: isMin(isMin), objFunc(objFunc), multiCon(multiCon), varCount(varCount) {
-		// TODO: 變數範圍應該傳入一個 tree node, 通過回溯祖先得到一串變數範圍 
 		// varRangeMultiCon = { Constraint().add(1, 0).geq(1) }; // 將變數範圍轉為多個約束
 		
 		initTableau(); // init tableau
 		insertConToTableau(); // 將約束插入 tableau
 		
-		if (!handlingInfeasible()) { // 檢查是否無解, 並做處理 (phase-1)
-			solutionType = Type::INFEASIBLE; // handlingInfeasible 輸出 false, 無解
-		} else { // handlingInfeasible 輸出 true, 可能為有解或無界. handlingInfeasible 已處理基底不足的問題
+		if (!handleInfeasible()) { // 檢查是否無解, 並做處理 (phase-1)
+			solutionType = Type::INFEASIBLE; // handleInfeasible 輸出 false, 無解
+			extremum = FP64_NAN;
+		} else { // handleInfeasible 輸出 true, 可能為有界或無界. handleInfeasible 已處理基底不足的問題
 			insertObjFuncToTableau(); // 將目標函數插入到 tableau 的第零列
-			
-			tableau.baseVarIndexs; // TODO: 消去 row 0 的非零基底行元素 (phase-2). 若沒做 phase-1 則這一步不會有實際影響
+			handleNonZeroHead(); // 處理 row 0 的非零基底行元素 (phase-2)
+			if (runMinSimplexMethod()) handleBound(); // 處理有界情況, 如果無界會提前終止並處理
 		}
+	}
+	
+	void print() { // debug
+		printf("Type: ");
+		if (solutionType == Type::BOUNDED) printf("Bounded\n");
+		else if (solutionType == Type::UNBOUNDED) printf("Unbounded\n");
+		else if (solutionType == Type::INFEASIBLE) printf("Infeasible\n");
 		
-		tableau.print();
+		printf(isMin ? "Minimum = " : "Maximum = ");
+		printf("%.2f\n", extremum);
+		
+		printf("Solution: ");
+		for (size_t i = 0; i < solution.size(); i++) printf("x%d = %.2f; ", (int)i, solution[i]);
+		printf("\n");
+		
+		if (unboundedDirection.size() > 0) {
+			printf("Unbounded: ");
+			for (size_t i = 0; i < unboundedDirection.size(); i++) printf("x%d = %.2f; ", (int)i, unboundedDirection[i]);
+			printf("\n");
+		}
 	}
 };
 
@@ -321,7 +363,6 @@ private:
 	bool isMin; // min = 1 / max = 0
 	Linearform objFunc; // 目標函數
 	vector<Constraint> multiCon; // 多個約束
-	// TODO: var range tree
 
 public:
 	IP(const string& mode, vector<pair<double, string>> terms) { // 宣告 min/max 和目標函數
@@ -344,7 +385,7 @@ public:
 	}
 	
 	void test() { // test
-		LP(isMin, objFunc, multiCon, bimap.getVarCount());
+		LP(isMin, objFunc, multiCon, bimap.getVarCount()).print();
 	}
 	
 	void print() { // debug
@@ -352,6 +393,10 @@ public:
 		objFunc.print(bimap);
 		for (Constraint& con: multiCon) con.print(bimap);
 	}
+};
+
+class Tester { // 有一些範例用來測試正確性
+	
 };
 
 int32_t main() {
