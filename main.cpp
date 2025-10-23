@@ -236,8 +236,17 @@ private:
 	void handleUnbound(uint32_t newBaseVarIndex) { // 若無界, 輸出當前向量和一個無限增長的方向向量 (這個向量集合仍然符合所有約束)
 		solutionType = Type::UNBOUNDED; // 無界
 		
+		solution = vector<double>(varCount, 0); // 空的解向量, 長度為一般變數的數目
+		unboundedDirection = vector<double>(varCount, 0); // 方向向量
+		for (uint32_t i = 1; i < tableau.rows; i++) {
+			uint32_t baseVarIndex = tableau.baseVarIndexs[i];
+			if (baseVarIndex <= varCount - 1) { // 如果基底變數編號為 0 ~ varCount-1 代表為一般變數
+				solution[baseVarIndex] = tableau(i, tableau.cols - 1);
+				unboundedDirection[baseVarIndex] = tableau(i, newBaseVarIndex) * (isMin ? 1 : -1);
+			}
+		} // slack var 編號 >= varCount, 所以不會出現在解向量裡
+		
 		extremum = isMin ? -FP64_INF : FP64_INF; // min -> -inf ; max -> inf
-		// TODO: unbound
 	}
 	
 	bool runMinSimplexMethod() { // 對 tableau 執行 min simplex method, 若有界回傳 true, 無解或無界回傳 false
@@ -371,7 +380,7 @@ public:
 		printf("\n");
 		
 		if (unboundedDirection.size() > 0) { // 如果無界, 印出方向向量
-			printf("Unbounded: ");
+			printf("Unbounded delta: ");
 			for (size_t i = 0; i < unboundedDirection.size(); i++) printf("x%d = %.2f; ", (int)i, unboundedDirection[i]);
 			printf("\n");
 		}
@@ -446,22 +455,44 @@ private:
 	
 	vector<TestLP> lpTests = { // 所有 LP 的測資
 		{ // test 0: Bounded
-			false, Linearform().add(1, 0).add(1, 1),
+			false, Linearform().add(1, 0).add(1, 1), // max x0 + x1
 			{
-				Constraint().add(4, 0).add(3, 1).leq(17),
-				Constraint().add(2, 0).add(-5, 1).geq(-9),
-				Constraint().add(1, 0).add(10, 1).geq(25)
+				Constraint().add(4, 0).add(3, 1).leq(17), // 4 x0 + 3 x1 <= 17
+				Constraint().add(2, 0).add(-5, 1).geq(-9), // 2 x0 - 5 x1 >= -9
+				Constraint().add(1, 0).add(10, 1).geq(25) // x0 + 10 x1 >= 25
 			},
 			{ { 0, FP64_INF }, { 0, FP64_INF } }
 		},
 		{ // test 1: Infeasible
-			false, Linearform().add(1, 0).add(1, 1),
+			false, Linearform().add(1, 0).add(1, 1), // max x0 + x1
 			{
-				Constraint().add(4, 0).add(3, 1).leq(17),
-				Constraint().add(2, 0).add(-5, 1).geq(-9),
-				Constraint().add(1, 0).add(10, 1).geq(30)
+				Constraint().add(4, 0).add(3, 1).leq(17), // 4 x0 + 3 x1 <= 17
+				Constraint().add(2, 0).add(-5, 1).geq(-9), // 2 x0 - 5 x1 >= -9
+				Constraint().add(1, 0).add(10, 1).geq(30) // x0 + 10 x1 >= 30
 			},
 			{ { 0, FP64_INF }, { 0, FP64_INF } }
+		},
+		{ // test 2: Unbounded (https://www.youtube.com/watch?v=113fYDGVzZk&t=30s)
+			false, Linearform().add(1, 0), // max x0
+			{
+				Constraint().add(1, 0).add(-1, 1).leq(1), // x0 - x1 <= 1
+				Constraint().add(2, 0).add(-1, 1).leq(4) // 2 x0 - x1 <= 4
+			},
+			{ { 0, FP64_INF }, { 0, FP64_INF } }
+		},
+		{ // test 3: Infeasible (edit by https://www.youtube.com/watch?v=58Jclpg0JCU&t=226s)
+			false, Linearform().add(3, 0).add(1, 1), // max 3 x0 + x1
+			{
+				Constraint().add(4, 0).add(2, 1).leq(11), // 4 x0 + 2 x1 <= 11
+			},
+			{ { 2, FP64_INF }, { 2, FP64_INF } } // x0 >= 2, x1 >= 2
+		},
+		{ // test 4: Bounded (edit by https://www.youtube.com/watch?v=58Jclpg0JCU&t=226s)
+			false, Linearform().add(3, 0).add(1, 1), // max 3 x0 + x1
+			{
+				Constraint().add(4, 0).add(2, 1).leq(11), // 4 x0 + 2 x1 <= 11
+			},
+			{ { 1, 2 }, { 0, FP64_INF } } // x0 <= [1, 2]
 		}
 	};
 
@@ -488,7 +519,7 @@ public:
 
 int32_t main() {
 	Tester tester;
-	tester.testLp(1);
+	tester.testLp(4);
 	
 	/*
 	IP("max", {{ 1, "x" }, { 1, "y" }})
