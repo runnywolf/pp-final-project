@@ -5,14 +5,20 @@
 #include <limits> // fp64 inf, nan
 #include <vector>
 #include <unordered_map> // map
+#include <queue> // min-heap
 #include <chrono> // 測速
 
 using namespace std;
 
 const double FP64_INF = numeric_limits<double>::infinity();
 const double FP64_NAN = numeric_limits<double>::quiet_NaN();
+const double EPS = 1e-10; // 浮點誤差
 
 enum class Relation { LEQ, EQ, GEQ }; // <= (LEQ), = (EQ), >= (GEQ)
+
+bool isInt(double var) { // var 是否是整數
+	return fabs(var - round(var)) < EPS;
+}
 
 template <typename K, typename V>
 bool mapHasKey(const unordered_map<K, V>& m, const K& key) {
@@ -148,10 +154,6 @@ public:
 
 class LP { // Linear Programming
 private:
-	static constexpr double EPS = 1e-10; // 浮點誤差
-	
-	enum class Type { BOUNDED, UNBOUNDED, INFEASIBLE }; // 有界, 無界, 無解
-	
 	class Tableau { // tableau, 注意: 第零列為 head, 第一列開始才是約束的部分
 	private:
 		vector<double> arr; // 扁平化的二維陣列
@@ -206,11 +208,6 @@ private:
 	uint32_t varCount; // 一般變數的個數, index 為 0 ~ varCount-1
 	vector<Constraint> varRangeMultiCon; // 將變數範圍轉為多個約束
 	
-	Type solutionType; // 解的狀態
-	vector<double> solution; // 解向量, 若無解會是空的
-	vector<double> unboundedDirection; // 若無界, 此值會是一個方向向量, 即使往無窮遠移動仍然滿足目標函數
-	double extremum; // min/max 極值
-	
 	int32_t findNewBaseVarIndex() { // 尋找一個新的基底變數, 若沒找到則回傳 -1
 		for (uint32_t j = 0; j <= tableau.cols - 2; j++) if (tableau(0, j) >= EPS) return j; // 最後一列是基底常數, 不能進入
 		return -1;
@@ -252,16 +249,16 @@ private:
 	
 	bool runMinSimplexMethod() { // 對 tableau 執行 min simplex method, 若有界回傳 true, 無解或無界回傳 false
 		while (true) {
-			const int32_t newBaseVarIndex = findNewBaseVarIndex(); // 嘗試尋找新基底
+			const int32_t newBaseVarIndex = findNewBaseVarIndex(); // 嘗試尋找新基底 [複雜度: n]
 			if (newBaseVarIndex == -1) break; // 若沒有找到可進入的基底, 跳出迴圈
 			
-			const int32_t rowIndex = findMinPosRatioRowIndex(newBaseVarIndex); // 嘗試尋找最小正數比值的列編號
+			const int32_t rowIndex = findMinPosRatioRowIndex(newBaseVarIndex); // 嘗試尋找最小正數比值的列編號 [複雜度: m]
 			if (rowIndex == -1) { // 若新基底存在, 但最小正數比值不存在, 則 LP 問題無界
 				handleUnbound(newBaseVarIndex);
 				return false; // 提前結束迴圈
 			}
 			
-			tableau.elimination(rowIndex, newBaseVarIndex); // 對新基底的行做消元, 只留下最小正數比值的列
+			tableau.elimination(rowIndex, newBaseVarIndex); // 對新基底的行做消元, 只留下最小正數比值的列 [複雜度: m*n]
 			tableau.baseVarIndexs[rowIndex] = newBaseVarIndex; // 更改新基底編號
 		}
 		
@@ -279,7 +276,7 @@ private:
 	void insertConToTableau() { // 將約束插入 tableau
 		uint32_t rowIndex = 1;
 		uint32_t slackVarColIndex = varCount - 1; // 因為一般變數的 col index 為 0 ~ varCount-1, 所以 slack var 插入的 col index 從這裡開始數
-		auto setTableauRow = [&](Constraint con) { // 將一個約束加入到 tableau
+		auto setTableauRow = [&](Constraint& con) { // 將一個約束加入到 tableau
 			for (auto& [varIndex, coef]: con.getTerms()) tableau(rowIndex, varIndex) = coef; // 填入一般變數
 			
 			if (con.haveSlackVar()) tableau(rowIndex, ++slackVarColIndex) = con.getSlackVarCoef(); // 如果有 slack var, 需要添加係數 1 或 -1 到 tableau 內
@@ -293,7 +290,7 @@ private:
 		for (Constraint& con: varRangeMultiCon) setTableauRow(con);
 	}
 	
-	bool handleInfeasible() { // 檢查是否無解, 並做處理, 若無解則回傳 false, 非無解則回傳 true
+	bool checkInfeasible() { // 檢查是否無解, 並做處理, 若無解則回傳 false, 非無解則回傳 true
 		if (!isTableauHaveArtificialVar()) return true; // 如果不存在 artificial var, 跳過這一步
 		
 		for (uint32_t i = 1; i < tableau.rows; i++) if (tableau.baseVarIndexs[i] == -1) {
@@ -330,7 +327,14 @@ private:
 	}
 
 public:
-	LP(bool isMin, Linearform& objFunc, vector<Constraint>& multiCon, vector<pair<double, double>> varRange)
+	enum class Type { BOUNDED, UNBOUNDED, INFEASIBLE }; // 有界, 無界, 無解
+	
+	Type solutionType; // 解的狀態
+	vector<double> solution; // 解向量, 若無解會是空的
+	vector<double> unboundedDirection; // 若無界, 此值會是一個方向向量, 即使往無窮遠移動仍然滿足目標函數
+	double extremum; // min/max 極值
+	
+	LP(bool isMin, Linearform& objFunc, vector<Constraint>& multiCon, vector<pair<double, double>>& varRange)
 	: isMin(isMin), objFunc(objFunc), multiCon(multiCon) {
 		varCount = varRange.size();
 		uint32_t i = 0;
@@ -343,10 +347,10 @@ public:
 		initTableau(); // init tableau
 		insertConToTableau(); // 將約束插入 tableau
 		
-		if (!handleInfeasible()) { // 檢查是否無解, 並做處理 (phase-1)
-			solutionType = Type::INFEASIBLE; // handleInfeasible 輸出 false, 無解
+		if (!checkInfeasible()) { // 檢查是否無解, 並做處理 (phase-1)
+			solutionType = Type::INFEASIBLE; // checkInfeasible 輸出 false, 無解
 			extremum = FP64_NAN;
-		} else { // handleInfeasible 輸出 true, 可能為有界或無界. handleInfeasible 已處理基底不足的問題
+		} else { // checkInfeasible 輸出 true, 可能為有界或無界. checkInfeasible 已處理基底不足的問題
 			insertObjFuncToTableau(); // 將目標函數插入到 tableau 的第零列
 			handleNonZeroHead(); // 處理 row 0 的非零基底行元素 (phase-2)
 			if (runMinSimplexMethod()) handleBound(); // 處理有界情況, 如果無界會提前終止並處理
@@ -373,10 +377,10 @@ public:
 		else if (solutionType == Type::UNBOUNDED) printf("Unbounded\n");
 		else if (solutionType == Type::INFEASIBLE) printf("Infeasible\n");
 		
-		printf(isMin ? "Minimum = " : "Maximum = "); // 印出極值
+		printf(isMin ? "LP Minimum = " : "LP Maximum = "); // 印出極值
 		printf("%.2f\n", extremum);
 		
-		printf("Solution: "); // 印出解向量
+		printf("LP Solution: "); // 印出解向量
 		for (size_t i = 0; i < solution.size(); i++) printf("x%d = %.2f; ", (int)i, solution[i]);
 		printf("\n");
 		
@@ -390,12 +394,113 @@ public:
 
 class IP { // Integer Programming
 private:
-	VarBimap bimap;
-	bool isMin; // min = 1 / max = 0
+	class Node { // branch & bound 的 node
+	private:
+		static int32_t getSplitVarIndex(LP& lp) { // 決定下次分支要切分的基底變數編號, 如果基底變數的值全部都是整數 (LP feasible) 則回傳 -1
+			for (uint32_t i = 0; i < lp.solution.size(); i++) if (!isInt(lp.solution[i])) return i; // 目前的策略是尋找編號最小的 float 變數值
+			return -1;
+		}
+	
+	public:
+		struct cmp { // priority queue 用的比較子, 會變成以 node 下界排序的 min-heap
+			bool operator()(const Node& a, const Node& b) const { return a.lowerBound > b.lowerBound; }
+		};
+		
+		enum class Type { IP_FEASIBLE, LP_FEASIBLE, INFEASIBLE, UNBOUNDED }; // 有 IP 解, 有 LP 解, 無解, 無界 (比較麻煩)
+		
+		vector<double> solution; // float LP 解
+		double lowerBound = FP64_NAN; // 節點的 float min LP 下界, int 解只可能更大
+		Type type; // node 的型態
+		vector<pair<double, double>> varRangeLeft; // 分支後, 左子節點每個變數的範圍, 注意: 一般變數 x_j 的範圍為 [varRange[j].first, varRange[j].second]
+		vector<pair<double, double>> varRangeRight; // 分支後, 右子節點每個變數的範圍
+		
+		Node(Linearform& objFunc, vector<Constraint>& multiCon, vector<pair<double, double>>& varRange) {
+			LP lp(true, objFunc, multiCon, varRange); // 解 LP (已經將 max 標準化為 min)
+			solution = lp.solution; // float LP 解
+			lowerBound = lp.extremum; // float min LP 的極值
+			
+			if (lp.solutionType == LP::Type::INFEASIBLE) type = Type::INFEASIBLE;
+			else if (lp.solutionType == LP::Type::UNBOUNDED) type == Type::UNBOUNDED;
+			else if (lp.solutionType == LP::Type::BOUNDED) {
+				int32_t splitVarIndex = getSplitVarIndex(lp); // 下次分支要切分的基底變數編號
+				if (splitVarIndex == -1) { // 如果基底變數的值全部都是整數 (IP feasible), 更新全域的 int min IP 上界
+					type = Type::IP_FEASIBLE;
+				} else { // 如果有基底變數的值是 float, 對這個基底切分
+					type = Type::LP_FEASIBLE;
+					varRangeLeft = varRange; // 複製兩份 varRange, 分別為左右子節點的變數範圍
+					varRangeRight = varRange;
+					
+					double splitValue = floor(lp.solution[splitVarIndex]); // 會將基底變數依照 <= splitValue 和 >= splitValue+1 切分成兩個 node
+					varRangeLeft[splitVarIndex].second = splitValue; // 將左子節點的切分基底值的上界設為 splitValue
+					varRangeRight[splitVarIndex].first = splitValue + 1; // 將右子節點的切分基底值的下界設為 splitValue + 1
+				}
+			}
+		}
+		
+		void print(VarBimap bimap) { // debug
+			if (type == Type::IP_FEASIBLE) printf("[IP solution found] Objective value = %.2f\n", lowerBound);
+			else if (type == Type::LP_FEASIBLE) printf("IP feasible objective value >= %.2f\n", lowerBound);
+			else if (type == Type::INFEASIBLE) printf("IP solution is infeasible.\n");
+			else if (type == Type::UNBOUNDED) printf("LP solution is unbounded, maybe IP solution does not exist.\n");
+			
+			printf("Left child node var range: ");
+			uint32_t varIndex = 0;
+			for (auto& [varMin, varMax]: varRangeLeft) {
+				printf("%s = [%.2f, %.2f]; ", bimap.getVarName(varIndex++).c_str(), varMin, varMax);
+			}
+			printf("\n");
+			
+			printf("Right child node var range: ");
+			varIndex = 0;
+			for (auto& [varMin, varMax]: varRangeRight) {
+				printf("%s = [%.2f, %.2f]; ", bimap.getVarName(varIndex++).c_str(), varMin, varMax);
+			}
+			printf("\n");
+		}
+	};
+	
+	bool isMin; // min = 1, max = 0
 	Linearform objFunc; // 目標函數
 	vector<Constraint> multiCon; // 多個約束
+	
+	VarBimap bimap; // 變數映射
+	priority_queue<Node, vector<Node>, Node::cmp> nodeQueue; // 以 float LP 下界排序的 min-heap, 先展開下界較小的 node 比較容易找到更小的解
+	double objValueUpperBound = FP64_INF; // 因為是求 min IP 問題, 所以有一個全域上界
+	
+	void init() { // 初始化 IP 問題
+		if (!isMin) objFunc.negate(); // 將 max 問題轉為 min 問題, 只需要將目標函數變號即可
+		
+		uint32_t varCount = bimap.getVarCount(); // 一般變數的個數
+		vector<pair<double, double>> varRange(varCount, { 0, FP64_INF }); // 生成一般變數的範圍, branch & bound 的 root node 的變數範圍全為 [0, inf]
+		Node rootNode = Node(objFunc, multiCon, varRange); // root node
+		checkNode(rootNode); // 檢查 node 的 solution type
+	}
+	
+	void checkNode(Node& node) { // 檢查一個 node 的 solution type, 決定是否要更新全域上界或推入 min heap
+		if (node.type == Node::Type::IP_FEASIBLE && node.lowerBound < objValueUpperBound) {
+			solutionType = Type::BOUNDED;
+			solution = node.solution; // 更新全域 IP 解
+			objValueUpperBound = node.lowerBound; // [剪枝] 如果 node 有整數解向量, 並且比現有的解更好, 更新全域上界, 不用繼續往下尋找
+		}
+		else if (node.type == Node::Type::LP_FEASIBLE) { // 如果 node 有浮點解向量
+			if (node.lowerBound < objValueUpperBound) nodeQueue.push(node); // 將 root node push 進 min-heap (繼續往下搜尋)
+		} // [剪枝] "node 下界 >= 全域上界" 的分支不用計算, 因為無法取得更好的結果
+		else if (node.type == Node::Type::UNBOUNDED) { // 如果 node 無界
+			solutionType = Type::UNBOUNDED; // 停止計算 IP
+		} // [剪枝] 如果 node 無解, 無視它
+		
+		nodeSolvedCount++; // 解 LP 式子的次數與 check 次數相同
+	}
 
 public:
+	enum class Type { BOUNDED, INFEASIBLE, UNBOUNDED };
+	
+	Type solutionType = Type::INFEASIBLE; // 預設是無解, 如果有發現 IP 解會修改此值
+	vector<double> solution; // 全域 IP 解向量
+	double extremum; // min/max 極值
+	
+	uint32_t nodeSolvedCount = 0; // 計算了幾次 LP 問題 (debug)
+	
 	IP(const string& mode, vector<pair<double, string>> terms) { // 宣告 min/max 和目標函數
 		isMin = mode == "min"; // min/max
 		for (auto& [coef, varName]: terms) objFunc.add(coef, bimap.getVarIndex(varName)); // 目標函數
@@ -415,14 +520,40 @@ public:
 		return *this;
 	}
 	
-	void test() { // test
-		LP(isMin, objFunc, multiCon, {{ 0, FP64_INF }, { 0, FP64_INF }}).print();
+	void solve() { // 計算 IP 問題
+		init(); // 生成初始 node 並 push 進 min-heap
+		
+		while (nodeQueue.size() > 0 && solutionType != Type::UNBOUNDED) { // min-heap 還有 node 就繼續分支, 目前 unbounded 會強制停下
+			Node node = nodeQueue.top(); // 取出下界較小的 node 比較容易找到更小的解
+			nodeQueue.pop();
+			
+			Node leftChildNode(objFunc, multiCon, node.varRangeLeft); // 生成並計算左子節點的 LP 問題
+			checkNode(leftChildNode); // 檢查 child node 的解
+			Node rightChildNode(objFunc, multiCon, node.varRangeRight); // 生成並計算右子節點的 LP 問題
+			checkNode(rightChildNode);
+		}
+		
+		extremum = objValueUpperBound * (isMin ? 1 : -1); // 極值
 	}
 	
 	void print() { // debug
-		printf(isMin ? "min " : "max ");
+		printf(isMin ? "min " : "max -> min "); // 印出目標函數
 		objFunc.print(bimap);
-		for (Constraint& con: multiCon) con.print(bimap);
+		for (Constraint& con: multiCon) con.print(bimap); // 印出約束
+		
+		printf("Type: "); // 印出 LP 的解的類型
+		if (solutionType == Type::BOUNDED) printf("Bounded\n");
+		else if (solutionType == Type::UNBOUNDED) printf("Unbounded\n");
+		else if (solutionType == Type::INFEASIBLE) printf("Infeasible\n");
+		
+		printf(isMin ? "IP Minimum = " : "IP Maximum = "); // 印出極值
+		printf("%.2f\n", extremum);
+		
+		printf("IP solution: "); // 印出 IP 解
+		for (size_t i = 0; i < solution.size(); i++) printf("%s = %.2f; ", bimap.getVarName(i).c_str(), solution[i]);
+		printf("\n");
+		
+		printf("Number of LP nodes solved: %d\n", nodeSolvedCount);
 	}
 };
 
@@ -519,14 +650,14 @@ public:
 };
 
 int32_t main() {
-	Tester tester;
-	tester.testAllLp();
+	// Tester tester;
+	// tester.testLp(3);
 	
-	/*
-	IP("max", {{ 1, "x" }, { 1, "y" }})
-		.addConstraint({{ 4, "x" }, { 3, "y" }}, "<=", 17)
-		.addConstraint({{ 2, "x" }, { -5, "y" }}, ">=", -9)
-		.addConstraint({{ 1, "x" }, { 10, "y" }}, ">=", 25).test();
-	*/
+	IP ip = IP("max", {{ 3, "x1" }, { 1, "x2" }})
+		.addConstraint({{ 4, "x1" }, { 2, "x2" }}, "<=", 11);
+	
+	ip.solve();
+	ip.print();
+	
 	return 0;
 }
