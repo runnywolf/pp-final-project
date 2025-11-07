@@ -7,6 +7,8 @@
 #include <unordered_map> // map
 #include <queue> // min-heap
 #include <chrono> // 測速
+#include "sc_params.hpp"
+
 
 using namespace std;
 
@@ -175,7 +177,8 @@ private:
 			this->rows = rows; // 設定列數
 			this->cols = cols; // 設定行數
 			arr = vector<double>(rows * cols, 0); // 預設全為零
-			baseVarIndexs = vector<int32_t>(cols, 0); // 因為第零列沒有基底編號, 使 index 對齊
+			// baseVarIndexs = vector<int32_t>(cols, 0); // 因為第零列沒有基底編號, 使 index 對齊
+			baseVarIndexs = vector<int32_t>(rows, 0);
 		}
 		
 		void scaleRow(uint32_t i, double s) { // 將列 i 除以常數 s
@@ -420,7 +423,7 @@ private:
 			lowerBound = lp.extremum; // float min LP 的極值
 			
 			if (lp.solutionType == LP::Type::INFEASIBLE) type = Type::INFEASIBLE;
-			else if (lp.solutionType == LP::Type::UNBOUNDED) type == Type::UNBOUNDED;
+			else if (lp.solutionType == LP::Type::UNBOUNDED) type = Type::UNBOUNDED;
 			else if (lp.solutionType == LP::Type::BOUNDED) {
 				int32_t splitVarIndex = getSplitVarIndex(lp); // 下次分支要切分的基底變數編號
 				if (splitVarIndex == -1) { // 如果基底變數的值全部都是整數 (IP feasible), 更新全域的 int min IP 上界
@@ -648,16 +651,17 @@ public:
 		for (size_t i = 0; i < lpTests.size(); i++) testLp(i);
 	}
 };
-
+#include "sc_model.cpp"
 int32_t main() {
-	// Tester tester;
-	// tester.testLp(3);
-	
-	IP ip = IP("max", {{ 3, "x1" }, { 1, "x2" }})
-		.addConstraint({{ 4, "x1" }, { 2, "x2" }}, "<=", 11);
-	
+	// 1) 取參數（可在 sc_params.hpp 改 default_sc_params() 內容）
+	SCParams P = default_sc_params();
+
+	// 2) 用參數建 IP 模型（目標 + 限制）
+	IP ip = build_supply_chain_ip(P);
+
+	// 3) 求解、印結果
 	ip.solve();
 	ip.print();
-	
+
 	return 0;
 }
