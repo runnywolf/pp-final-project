@@ -18,10 +18,6 @@ const double EPS = 1e-10; // 浮點誤差
 
 enum class Relation { LEQ, EQ, GEQ }; // <= (LEQ), = (EQ), >= (GEQ)
 
-bool isInt(double var) { // var 是否是整數
-	return fabs(var - round(var)) < EPS;
-}
-
 template <typename K, typename V>
 bool mapHasKey(const unordered_map<K, V>& m, const K& key) {
 	return m.find(key) != m.end(); // 如果 unordered_map 存在某個 key, 則回傳 value, 否則回傳 defaultValue
@@ -49,6 +45,23 @@ public:
 	string getVarName(uint32_t varIndex) { // 編號 j (x_j) 轉字串變數
 		if (varIndex <= indexToStr.size() - 1) return indexToStr[varIndex];
 		return "[unknown-var]";
+	}
+};
+
+class FOP {
+public:
+	static constexpr double EPS = 1e-4; // 浮點誤差
+	
+	static bool isInt(double x) { // 浮點數 x 是否是整數
+		return abs(x - round(x)) <= EPS;
+	}
+	
+	static bool isZero(double x) { // 浮點數 x 是否為 0
+		return abs(x) <= EPS;
+	}
+	
+	static bool isPos(double x) { // 浮點數 x 是否為正數
+		return x >= EPS;
 	}
 };
 
@@ -177,8 +190,7 @@ private:
 			this->rows = rows; // 設定列數
 			this->cols = cols; // 設定行數
 			arr = vector<double>(rows * cols, 0); // 預設全為零
-			// baseVarIndexs = vector<int32_t>(cols, 0); // 因為第零列沒有基底編號, 使 index 對齊
-			baseVarIndexs = vector<int32_t>(rows, 0);
+			baseVarIndexs = vector<int32_t>(rows, 0); // 因為第零列沒有基底編號, 使 index 對齊
 		}
 		
 		void scaleRow(uint32_t i, double s) { // 將列 i 除以常數 s
@@ -212,14 +224,14 @@ private:
 	vector<Constraint> varRangeMultiCon; // 將變數範圍轉為多個約束
 	
 	int32_t findNewBaseVarIndex() { // 尋找一個新的基底變數, 若沒找到則回傳 -1
-		for (uint32_t j = 0; j <= tableau.cols - 2; j++) if (tableau(0, j) >= EPS) return j; // 最後一列是基底常數, 不能進入
+		for (uint32_t j = 0; j <= tableau.cols - 2; j++) if (FOP::isPos(tableau(0, j))) return j; // 最後一列是基底常數, 不能進入
 		return -1;
 	}
 	
 	int32_t findMinPosRatioRowIndex(uint32_t baseVarIndex) { // 選定要進入的基底後, 尋找一個 Aij / r 最小的正比值, 回傳這個值在第幾列, 找不到回傳 -1
 		double minPosRatio = 1e300; // 最小正比值: 右側常數/係數
 		int32_t minPosRatioRowIndex = -1; // 要更換基底的 row index, 若為 -1 代表沒有找到
-		for (uint32_t i = 1; i < tableau.rows; i++) if (tableau(i, baseVarIndex) >= EPS) { // 要正比值
+		for (uint32_t i = 1; i < tableau.rows; i++) if (FOP::isPos(tableau(i, baseVarIndex))) { // 要正比值
 			double ratio = tableau(i, tableau.cols - 1) / tableau(i, baseVarIndex);
 			if (ratio < minPosRatio) {
 				minPosRatio = ratio;
@@ -313,8 +325,8 @@ private:
 	void handleNonZeroHead() { // 處理 row 0 的非零基底行元素 (phase-2). 若沒做 phase-1 則這一步不會有實際影響
 		for (uint32_t i = 1; i < tableau.rows; i++) {
 			uint32_t baseVarIndex = tableau.baseVarIndexs[i]; // 檢查每一列對應的基底變數所對應的行的 row 0 元素是不是 0
-			if (abs(tableau(0, baseVarIndex)) >= EPS) tableau.addRowToRow(i, 0, -tableau(0, baseVarIndex)); // 如果非 0, 需要執行列運算, 消去它
-		} // 避免浮點誤差, 介於 +-EPS 內會視為 0
+			if (!FOP::isZero(tableau(0, baseVarIndex))) tableau.addRowToRow(i, 0, -tableau(0, baseVarIndex)); // 如果非 0, 需要執行列運算, 消去它
+		}
 	}
 	
 	void handleBound() { // 處理有界的情況
@@ -360,20 +372,22 @@ public:
 		}
 	}
 	
-	void print() { // debug
-		VarBimap bimap; // 因為 IP 已經將字串變數轉為 index 跟 LP 溝通, 所以 LP 抽象層並不知道 varName, 所以這邊註冊一個 x0, x1, x2 (抽象 index)
-		for (uint32_t i = 0; i < varCount; i++) bimap.getVarIndex("x" + to_string(i)); // 註冊 x0, x1, x2, ...
-		
-		printf(isMin ? "min " : "max "); // 印出目標函數
-		objFunc.print(bimap);
-		for (Constraint& con: multiCon) con.print(bimap); // 印出約束
-		
-		if (varRangeMultiCon.size() == 0) printf("Var range is empty.");
-		for (Constraint& con: varRangeMultiCon) { // 印出變數範圍
-			con.print(bimap, false);
-			printf("; ");
+	void print(bool showCon = false) { // debug
+		if (showCon) {
+			VarBimap bimap; // 因為 IP 已經將字串變數轉為 index 跟 LP 溝通, 所以 LP 抽象層並不知道 varName, 所以這邊註冊一個 x0, x1, x2 (抽象 index)
+			for (uint32_t i = 0; i < varCount; i++) bimap.getVarIndex("x" + to_string(i)); // 註冊 x0, x1, x2, ...
+			
+			printf(isMin ? "min " : "max "); // 印出目標函數
+			objFunc.print(bimap);
+			for (Constraint& con: multiCon) con.print(bimap); // 印出約束
+			
+			if (varRangeMultiCon.size() == 0) printf("Var range is empty.");
+			for (Constraint& con: varRangeMultiCon) { // 印出變數範圍
+				con.print(bimap, false);
+				printf("; ");
+			}
+			printf("\n");
 		}
-		printf("\n");
 		
 		printf("Type: "); // 印出 LP 的解的類型
 		if (solutionType == Type::BOUNDED) printf("Bounded\n");
@@ -400,7 +414,7 @@ private:
 	class Node { // branch & bound 的 node
 	private:
 		static int32_t getSplitVarIndex(LP& lp) { // 決定下次分支要切分的基底變數編號, 如果基底變數的值全部都是整數 (LP feasible) 則回傳 -1
-			for (uint32_t i = 0; i < lp.solution.size(); i++) if (!isInt(lp.solution[i])) return i; // 目前的策略是尋找編號最小的 float 變數值
+			for (uint32_t i = 0; i < lp.solution.size(); i++) if (!FOP::isInt(lp.solution[i])) return i; // 目前的策略是尋找編號最小的 float 變數值
 			return -1;
 		}
 	
@@ -422,6 +436,8 @@ private:
 			solution = lp.solution; // float LP 解
 			lowerBound = lp.extremum; // float min LP 的極值
 			
+			if (lp.solutionType == LP::Type::UNBOUNDED) lp.print(); // [debug]
+			
 			if (lp.solutionType == LP::Type::INFEASIBLE) type = Type::INFEASIBLE;
 			else if (lp.solutionType == LP::Type::UNBOUNDED) type = Type::UNBOUNDED;
 			else if (lp.solutionType == LP::Type::BOUNDED) {
@@ -440,11 +456,13 @@ private:
 			}
 		}
 		
-		void print(VarBimap bimap) { // debug
+		void print(VarBimap bimap, bool showRange = false) { // debug
 			if (type == Type::IP_FEASIBLE) printf("[IP solution found] Objective value = %.2f\n", lowerBound);
 			else if (type == Type::LP_FEASIBLE) printf("IP feasible objective value >= %.2f\n", lowerBound);
 			else if (type == Type::INFEASIBLE) printf("IP solution is infeasible.\n");
 			else if (type == Type::UNBOUNDED) printf("LP solution is unbounded, maybe IP solution does not exist.\n");
+			
+			if (!showRange) return;
 			
 			printf("Left child node var range: ");
 			uint32_t varIndex = 0;
@@ -480,6 +498,8 @@ private:
 	}
 	
 	void checkNode(Node& node) { // 檢查一個 node 的 solution type, 決定是否要更新全域上界或推入 min heap
+		node.print(bimap); // [debug]
+		
 		if (node.type == Node::Type::IP_FEASIBLE && node.lowerBound < objValueUpperBound) {
 			solutionType = Type::BOUNDED;
 			solution = node.solution; // 更新全域 IP 解
@@ -539,10 +559,12 @@ public:
 		extremum = objValueUpperBound * (isMin ? 1 : -1); // 極值
 	}
 	
-	void print() { // debug
-		printf(isMin ? "min " : "max -> min "); // 印出目標函數
-		objFunc.print(bimap);
-		for (Constraint& con: multiCon) con.print(bimap); // 印出約束
+	void print(bool showCon = false) { // debug
+		if (showCon) {
+			printf(isMin ? "min " : "max -> min "); // 印出目標函數
+			objFunc.print(bimap);
+			for (Constraint& con: multiCon) con.print(bimap); // 印出約束
+		}
 		
 		printf("Type: "); // 印出 LP 的解的類型
 		if (solutionType == Type::BOUNDED) printf("Bounded\n");
@@ -651,6 +673,7 @@ public:
 		for (size_t i = 0; i < lpTests.size(); i++) testLp(i);
 	}
 };
+
 #include "sc_model.cpp"
 int32_t main() {
 	// 1) 取參數（可在 sc_params.hpp 改 default_sc_params() 內容）
