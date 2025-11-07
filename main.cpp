@@ -10,9 +10,63 @@
 
 using namespace std;
 
+class FOP {
+public:
+	static constexpr double EPS = 1e-4; // 浮點誤差
+	
+	static bool isInt(double x) { // 浮點數 x 是否是整數
+		return abs(x - round(x)) <= EPS;
+	}
+	
+	static bool isZero(double x) { // 浮點數 x 是否為 0
+		return abs(x) <= EPS;
+	}
+	
+	static bool isPos(double x) { // 浮點數 x 是否為正數
+		return x >= EPS;
+	}
+};
+
+// 平行化區域 start
+#include <omp.h>
+#include <immintrin.h>
+
+// 平行化版本的 array elimination, 用 A_{ij} 消去行 j 的其他元素, 並將列 i 同除 A_{ij}, 使 A_{ij} = 1
+void fastArrayElimination(uint32_t cols, vector<double>& arr, uint32_t i, uint32_t j) { // arr 是扁平化的二維陣列
+	uint32_t rows = arr.size() / cols;
+	
+	const uint32_t simdWidth = 4; // 一次處理 4 個 double
+	double* ptrRowI = arr.data() + cols * (size_t)(i); // A_{i0} 的指標
+	
+	#pragma omp parallel for
+	for (uint32_t k = 0; k < rows; k++) { // k 為每個 pthread 負責的列運算 row 編號, 將列 i 乘常數消去列 k
+		if (k == i) continue; // 列 i 不能消去列 i
+		
+		double* ptrRowK = arr.data() + cols * (size_t)(k); // A_{k0} 的指標
+		const double ratio = ptrRowK[j] / ptrRowI[j]; // 列 i 乘常數加到列 k, 消去行 j 的其他元素
+		// if (FOP::isZero(ratio)) continue; // [我不知道為什麼加這一行會卡死] 常數是 0 就不做列運算
+		
+		__m256d vecRatio = _mm256_set1_pd(ratio); // 全部都是常數的向量
+		uint32_t c = 0;
+		for (; c + (simdWidth-1) < cols; c += simdWidth) { // 向量運算不能超出列 k, 不然會寫到列 k+1 的記憶體
+			__m256d vecScaled = _mm256_mul_pd(_mm256_loadu_pd(ptrRowI + c), vecRatio); // 列 i 乘常數 (vec)
+			_mm256_storeu_pd(ptrRowK + c, _mm256_sub_pd(_mm256_loadu_pd(ptrRowK + c), vecScaled)); // 列 i 乘常數消去列 k (vec)
+		}
+		for (; c < cols; c++) ptrRowK[c] -= ptrRowI[c] * ratio; // 列 i 乘常數消去列 k
+		
+		ptrRowK[j] = 0; // 保證行 j 的其他元素被消去
+	}
+	
+	const double aij = arr[cols * i + j];
+	for (uint32_t k = 0; k < cols; k++) arr[cols * i + k] /= aij; // 列 i 同除 A_{ij}, 使 A_{ij} = 1
+}
+
+// 平行化區域 end
+
+// 以下為單執行序的原始演算法
+
 const double FP64_INF = numeric_limits<double>::infinity();
 const double FP64_NAN = numeric_limits<double>::quiet_NaN();
-const double EPS = 1e-10; // 浮點誤差
 
 enum class Relation { LEQ, EQ, GEQ }; // <= (LEQ), = (EQ), >= (GEQ)
 
@@ -43,23 +97,6 @@ public:
 	string getVarName(uint32_t varIndex) { // 編號 j (x_j) 轉字串變數
 		if (varIndex <= indexToStr.size() - 1) return indexToStr[varIndex];
 		return "[unknown-var]";
-	}
-};
-
-class FOP {
-public:
-	static constexpr double EPS = 1e-4; // 浮點誤差
-	
-	static bool isInt(double x) { // 浮點數 x 是否是整數
-		return abs(x - round(x)) <= EPS;
-	}
-	
-	static bool isZero(double x) { // 浮點數 x 是否為 0
-		return abs(x) <= EPS;
-	}
-	
-	static bool isPos(double x) { // 浮點數 x 是否為正數
-		return x >= EPS;
 	}
 };
 
@@ -200,6 +237,9 @@ private:
 		}
 		
 		void elimination(uint32_t i, uint32_t j) { // 用 A_{ij} 消去行 j 的其他元素, 並將列 i 同除 A_{ij}, 使 A_{ij} = 1
+			fastArrayElimination(cols, arr, i, j);
+			return; // [debug] 目前正在嘗試加速, 所以跳過原始演算法
+			
 			const double aij = arr_(i, j);
 			for (uint32_t k = 0; k < rows; k++) if (k != i) addRowToRow(i, k, -arr_(k, j) / aij); // 用 A_{ij} 消去行 j 的其他元素
 			scaleRow(i, aij); // 將列 i 同除 A_{ij}, 使 A_{ij} = 1
@@ -419,7 +459,7 @@ private:
 		static double getSplitValue(pair<double, double> varRange, double varSolution) { // 根據某個基底變數的範圍和 LP 解, 決定切分值
 			if (varRange.second == FP64_INF) return varSolution; // 將 [?, inf] 切分為 [?, sol] & [sol, inf]
 			return (varRange.first + varRange.second) / 2; // 將 [a, b] 根據中點 (a+b)/2 切分
-		}
+		} // 因為如果照著某個 LP solution 去分支 (投影片的演算法), 會嘗試對特定變數切 1000, 999, 998, ... (所以目前是直接對半切)
 	
 	public:
 		struct cmp { // priority queue 用的比較子, 會變成以 node 下界排序的 min-heap
