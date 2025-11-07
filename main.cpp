@@ -7,8 +7,6 @@
 #include <unordered_map> // map
 #include <queue> // min-heap
 #include <chrono> // 測速
-#include "sc_params.hpp"
-
 
 using namespace std;
 
@@ -417,6 +415,11 @@ private:
 			for (uint32_t i = 0; i < lp.solution.size(); i++) if (!FOP::isInt(lp.solution[i])) return i; // 目前的策略是尋找編號最小的 float 變數值
 			return -1;
 		}
+		
+		static double getSplitValue(pair<double, double> varRange, double varSolution) { // 根據某個基底變數的範圍和 LP 解, 決定切分值
+			if (varRange.second == FP64_INF) return varSolution; // 將 [?, inf] 切分為 [?, sol] & [sol, inf]
+			return (varRange.first + varRange.second) / 2; // 將 [a, b] 根據中點 (a+b)/2 切分
+		}
 	
 	public:
 		struct cmp { // priority queue 用的比較子, 會變成以 node 下界排序的 min-heap
@@ -428,15 +431,13 @@ private:
 		vector<double> solution; // float LP 解
 		double lowerBound = FP64_NAN; // 節點的 float min LP 下界, int 解只可能更大
 		Type type; // node 的型態
-		vector<pair<double, double>> varRangeLeft; // 分支後, 左子節點每個變數的範圍, 注意: 一般變數 x_j 的範圍為 [varRange[j].first, varRange[j].second]
-		vector<pair<double, double>> varRangeRight; // 分支後, 右子節點每個變數的範圍
+		vector<pair<double, double>> varRangeLeft; // 下一次分支, 左子節點每個變數的範圍, 注意: 變數 x_j 的範圍為 [varRange[j].first, varRange[j].second]
+		vector<pair<double, double>> varRangeRight; // 下一次分支, 右子節點每個變數的範圍
 		
 		Node(Linearform& objFunc, vector<Constraint>& multiCon, vector<pair<double, double>>& varRange) {
 			LP lp(true, objFunc, multiCon, varRange); // 解 LP (已經將 max 標準化為 min)
 			solution = lp.solution; // float LP 解
 			lowerBound = lp.extremum; // float min LP 的極值
-			
-			if (lp.solutionType == LP::Type::UNBOUNDED) lp.print(); // [debug]
 			
 			if (lp.solutionType == LP::Type::INFEASIBLE) type = Type::INFEASIBLE;
 			else if (lp.solutionType == LP::Type::UNBOUNDED) type = Type::UNBOUNDED;
@@ -444,12 +445,12 @@ private:
 				int32_t splitVarIndex = getSplitVarIndex(lp); // 下次分支要切分的基底變數編號
 				if (splitVarIndex == -1) { // 如果基底變數的值全部都是整數 (IP feasible), 更新全域的 int min IP 上界
 					type = Type::IP_FEASIBLE;
-				} else { // 如果有基底變數的值是 float, 對這個基底切分
+				} else { // 如果有基底變數的值是 float, 計算出下一次分支的左右節點的變數範圍
 					type = Type::LP_FEASIBLE;
 					varRangeLeft = varRange; // 複製兩份 varRange, 分別為左右子節點的變數範圍
 					varRangeRight = varRange;
 					
-					double splitValue = floor(lp.solution[splitVarIndex]); // 會將基底變數依照 <= splitValue 和 >= splitValue+1 切分成兩個 node
+					double splitValue = floor(getSplitValue(varRangeLeft[splitVarIndex], lp.solution[splitVarIndex])); // 切分值
 					varRangeLeft[splitVarIndex].second = splitValue; // 將左子節點的切分基底值的上界設為 splitValue
 					varRangeRight[splitVarIndex].first = splitValue + 1; // 將右子節點的切分基底值的下界設為 splitValue + 1
 				}
@@ -462,18 +463,25 @@ private:
 			else if (type == Type::INFEASIBLE) printf("IP solution is infeasible.\n");
 			else if (type == Type::UNBOUNDED) printf("LP solution is unbounded, maybe IP solution does not exist.\n");
 			
+			for (size_t i = 0; i < solution.size(); i++) if (varRangeLeft[i].first != varRangeRight[i].first) { // 印出下一次分支的分割條件
+				printf("Next split: %s = ", bimap.getVarName(i).c_str());
+				printf("[%.2f %.2f] & ", varRangeLeft[i].first, varRangeLeft[i].second);
+				printf("[%.2f %.2f]\n", varRangeRight[i].first, varRangeRight[i].second);
+				break;
+			}
+			
 			if (!showRange) return;
 			
 			printf("Left child node var range: ");
 			uint32_t varIndex = 0;
-			for (auto& [varMin, varMax]: varRangeLeft) {
+			for (auto& [varMin, varMax]: varRangeLeft) if (varMin != 0 || varMax != FP64_INF) {
 				printf("%s = [%.2f, %.2f]; ", bimap.getVarName(varIndex++).c_str(), varMin, varMax);
 			}
 			printf("\n");
 			
 			printf("Right child node var range: ");
 			varIndex = 0;
-			for (auto& [varMin, varMax]: varRangeRight) {
+			for (auto& [varMin, varMax]: varRangeRight) if (varMin != 0 || varMax != FP64_INF) {
 				printf("%s = [%.2f, %.2f]; ", bimap.getVarName(varIndex++).c_str(), varMin, varMax);
 			}
 			printf("\n");
@@ -498,7 +506,7 @@ private:
 	}
 	
 	void checkNode(Node& node) { // 檢查一個 node 的 solution type, 決定是否要更新全域上界或推入 min heap
-		node.print(bimap); // [debug]
+		printf("node queue size = %d; ", nodeQueue.size()); node.print(bimap); // [debug]
 		
 		if (node.type == Node::Type::IP_FEASIBLE && node.lowerBound < objValueUpperBound) {
 			solutionType = Type::BOUNDED;
@@ -674,6 +682,7 @@ public:
 	}
 };
 
+#include "sc_params.hpp"
 #include "sc_model.cpp"
 int32_t main() {
 	// 1) 取參數（可在 sc_params.hpp 改 default_sc_params() 內容）
