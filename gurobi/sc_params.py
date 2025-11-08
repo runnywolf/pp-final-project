@@ -1,93 +1,197 @@
 # -*- coding: utf-8 -*-
-# 擴充版參數：I=5, J=4, K=6, L=8
+"""
+自動生成參數（Python 版）
+- 介面乾淨：透過函式參數調整超參數（與 C++ SCGenCfg 一致的語意）
+- 數值偏小、整數化、且保證每件正利潤（price > minProd + V*minShipPerVol）
+"""
+
 from typing import Dict, List
 
-def get_default_params():
-    # 集合
-    I: List[str] = ["A", "B", "C", "D", "E"]                # 產品
-    J: List[str] = ["F1", "F2", "F3", "F4"]                 # 工廠
-    K: List[str] = ["W1", "W2", "W3", "W4", "W5", "W6"]     # 倉庫
-    L: List[str] = ["S1", "S2", "S3", "S4", "S5", "S6", "S7", "S8"]  # 門市
 
-    # 產品體積 V_i（立方公尺/件）
-    V: Dict[str, float] = {"A":0.08, "B":0.15, "C":0.35, "D":0.60, "E":1.20}
+def _make_product_names(n: int) -> List[str]:
+    v = []
+    for i in range(n):
+        base = chr(ord('A') + (i % 26))
+        round_ = i // 26
+        v.append(base if round_ == 0 else f"{base}{round_+1}")
+    return v
 
-    # 售價 p_{i,l}
-    price = {
-        "A": {"S1":  8300, "S2":  8200, "S3":  8100, "S4":  8050, "S5":  8150, "S6":  8250, "S7":  8000, "S8":  7950},
-        "B": {"S1": 12400, "S2": 12500, "S3": 12300, "S4": 12100, "S5": 12250, "S6": 12450, "S7": 12000, "S8": 11950},
-        "C": {"S1": 36000, "S2": 36200, "S3": 35800, "S4": 35500, "S5": 35750, "S6": 36100, "S7": 35300, "S8": 35200},
-        "D": {"S1": 52000, "S2": 52500, "S3": 51500, "S4": 51000, "S5": 51200, "S6": 52300, "S7": 50800, "S8": 50600},
-        "E": {"S1": 88000, "S2": 88500, "S3": 87500, "S4": 87000, "S5": 87200, "S6": 88200, "S7": 86800, "S8": 86600},
+
+def _make_seq(prefix: str, n: int) -> List[str]:
+    return [f"{prefix}{i+1}" for i in range(n)]
+
+
+def gen_params(
+    I: int = 3, J: int = 2, K: int = 1, L: int = 2,
+    # 體積
+    vol_start: int = 1, vol_step: int = 1,
+    # 工時
+    time_base: int = 1, time_parity_bonus: int = 1,
+    # 生產成本
+    cost_base: int = 200, cost_step: int = 100, cost_grad_pct: int = 8,
+    # 需求
+    demand_base: int = 20, demand_i_step: int = 5, demand_l_step: int = 3,
+    # 運費（以體積計）
+    tc1_base: int = 8, tc2_base: int = 9, tc_step: int = 2,
+    # 價格與懲罰
+    margin_frac: float = 0.25, margin_floor_base: int = 20, margin_floor_step: int = 5,
+    penalty_frac: float = 0.6,
+    # 產能與倉容
+    cap_util: float = 0.7, cap_buffer: int = 50, wh_capacity_share: float = 0.5,
+    # 固定費（小）
+    wh_rent_base: int = 2000, wh_rent_step: int = 200,
+    store_rent_base: int = 6000, store_rent_step: int = 500,
+):
+    # === 集合 ===
+    I_names: List[str] = _make_product_names(I)
+    J_names: List[str] = _make_seq("F", J)
+    K_names: List[str] = _make_seq("W", K)
+    L_names: List[str] = _make_seq("S", L)
+
+    # === 體積（整數）V_i = vol_start + vol_step*i，至少 1 ===
+    V: Dict[str, int] = {}
+    for i, pi in enumerate(I_names):
+        V[pi] = max(1, vol_start + vol_step * i)
+
+    # === 單位工時（整數）T_{i,j} = time_base + i + (j%2)*time_parity_bonus，至少 1 ===
+    prod_time: Dict[str, Dict[str, int]] = {}
+    for i, pi in enumerate(I_names):
+        row = {}
+        for j, fj in enumerate(J_names):
+            t = time_base + i + (j % 2) * time_parity_bonus
+            row[fj] = max(1, t)
+        prod_time[pi] = row
+
+    # === 生產成本（整數）base_cost_i = cost_base + cost_step*i，工廠 ±cost_grad_pct 線性梯度 ===
+    prod_cost: Dict[str, Dict[str, int]] = {}
+    for i, pi in enumerate(I_names):
+        base = max(1, cost_base + cost_step * i)
+        row = {}
+        for j, fj in enumerate(J_names):
+            if J > 1:
+                shift = (j * (2 * cost_grad_pct)) // (J - 1) - cost_grad_pct
+            else:
+                shift = 0
+            row[fj] = max(1, base * (100 + shift) // 100)
+        prod_cost[pi] = row
+
+    # === 需求（整數）D_{i,l} = demand_base + demand_i_step*i + demand_l_step*(l%4) ===
+    demand: Dict[str, Dict[str, int]] = {}
+    for i, pi in enumerate(I_names):
+        row = {}
+        for l, sl in enumerate(L_names):
+            d = demand_base + demand_i_step * i + demand_l_step * (l % 4)
+            row[sl] = max(0, d)
+        demand[pi] = row
+
+    # === 運費（整數、以體積計）===
+    tc1: Dict[str, Dict[str, int]] = {}
+    for j, fj in enumerate(J_names):
+        row = {}
+        for k, wk in enumerate(K_names):
+            v = tc1_base + tc_step * ((j % 3) + (k % 4))
+            row[wk] = max(0, v)
+        tc1[fj] = row
+
+    tc2: Dict[str, Dict[str, int]] = {}
+    for k, wk in enumerate(K_names):
+        row = {}
+        for l, sl in enumerate(L_names):
+            v = tc2_base + tc_step * ((k % 4) + (l % 4))
+            row[sl] = max(0, v)
+        tc2[wk] = row
+
+    # === min 生產成本 & 每門市最便宜單位體積運價 ===
+    min_prod: Dict[str, int] = {pi: min(prod_cost[pi][fj] for fj in J_names) for pi in I_names}
+
+    min_ship_per_vol: Dict[str, int] = {}
+    for sl in L_names:
+        best = 10**9
+        for wk in K_names:
+            bestF = min(tc1[fj][wk] for fj in J_names)
+            best = min(best, bestF + tc2[wk][sl])
+        min_ship_per_vol[sl] = best if best < 10**9 else 0  # K=0 不會發生，保險
+
+    # === 售價（整數、保證正利潤） price = minProd + V * minShipPerVol + margin_i ===
+    price: Dict[str, Dict[str, int]] = {}
+    for i, pi in enumerate(I_names):
+        base_margin = max(int(min_prod[pi] * margin_frac), margin_floor_base + margin_floor_step * i, 1)
+        row = {}
+        for sl in L_names:
+            ship = V[pi] * max(0, min_ship_per_vol[sl])
+            p = min_prod[pi] + ship + base_margin
+            p = max(p, min_prod[pi] + ship + 1)  # 強制至少 +1，確保 margin>0
+            row[sl] = p
+        price[pi] = row
+
+    # === 未滿足懲罰（整數） penalty = floor(penalty_frac * price) ===
+    penalty: Dict[str, Dict[str, int]] = {
+        pi: {sl: int(price[pi][sl] * penalty_frac) for sl in L_names} for pi in I_names
     }
 
-    # 需求上限 D_{i,l}
-    demand = {
-        "A": {"S1": 2000, "S2": 1400, "S3": 1600, "S4": 1500, "S5": 1300, "S6": 1700, "S7": 1200, "S8": 1100},
-        "B": {"S1":  950, "S2":  800, "S3":  850, "S4":  820, "S5":  780, "S6":  900, "S7":  750, "S8":  700},
-        "C": {"S1":  300, "S2":  320, "S3":  220, "S4":  240, "S5":  210, "S6":  260, "S7":  200, "S8":  190},
-        "D": {"S1":  180, "S2":  150, "S3":  160, "S4":  140, "S5":  130, "S6":  170, "S7":  120, "S8":  110},
-        "E": {"S1":   90, "S2":   80, "S3":   70, "S4":   60, "S5":   55, "S6":   75, "S7":   50, "S8":   45},
-    }
+    # === 工廠工時上限（整數） Cap ≈ cap_util × (總需求工時 / J) + cap_buffer ===
+    sumD: Dict[str, int] = {pi: sum(demand[pi][sl] for sl in L_names) for pi in I_names}
+    cap: Dict[str, int] = {}
+    for fj in J_names:
+        hours = 0
+        for pi in I_names:
+            hours += sumD[pi] * prod_time[pi][fj]
+        cap[fj] = max(1, int((hours / max(1, J)) * cap_util) + cap_buffer)
 
-    # 未滿足懲罰 M_{i,l}
-    penalty = {
-        "A": {"S1":  2700, "S2":  2650, "S3":  2600, "S4":  2600, "S5":  2620, "S6":  2680, "S7":  2550, "S8":  2520},
-        "B": {"S1":  4400, "S2":  4500, "S3":  4350, "S4":  4300, "S5":  4320, "S6":  4450, "S7":  4250, "S8":  4200},
-        "C": {"S1":  8800, "S2":  8900, "S3":  8600, "S4":  8500, "S5":  8550, "S6":  8850, "S7":  8400, "S8":  8350},
-        "D": {"S1": 15500, "S2": 15800, "S3": 15000, "S4": 14800, "S5": 14900, "S6": 15600, "S7": 14600, "S8": 14500},
-        "E": {"S1": 27000, "S2": 27500, "S3": 26200, "S4": 25800, "S5": 26000, "S6": 27200, "S7": 25500, "S8": 25200},
-    }
+    # === 倉庫吞吐容量（整數體積）≈ wh_capacity_share × (總需求體積 / K) ===
+    total_vol = 0
+    for pi in I_names:
+        total_vol += sumD[pi] * V[pi]
+    wh_cap: Dict[str, int] = {}
+    for wk in K_names:
+        capk = int((total_vol * wh_capacity_share) / max(1, K))
+        wh_cap[wk] = max(1, capk)
 
-    # 生產成本 C_{i,j}
-    prod_cost = {
-        "A": {"F1":  3800, "F2":  4000, "F3":  3950, "F4":  3850},
-        "B": {"F1":  6100, "F2":  6000, "F3":  6250, "F4":  6050},
-        "C": {"F1": 22500, "F2": 21800, "F3": 23000, "F4": 22000},
-        "D": {"F1": 32000, "F2": 31500, "F3": 33000, "F4": 31800},
-        "E": {"F1": 54000, "F2": 53500, "F3": 55000, "F4": 54500},
-    }
+    # === 固定費（小、整數） ===
+    wh_rent: Dict[str, int]   = {wk: wh_rent_base   + wh_rent_step   * (i+1) for i, wk in enumerate(K_names)}
+    store_rent: Dict[str, int]= {sl: store_rent_base+ store_rent_step* (i+1) for i, sl in enumerate(L_names)}
 
-    # 單位工時 T_{i,j}
-    prod_time = {
-        "A": {"F1": 0.90, "F2": 0.85, "F3": 0.95, "F4": 0.90},
-        "B": {"F1": 1.50, "F2": 1.40, "F3": 1.55, "F4": 1.45},
-        "C": {"F1": 3.20, "F2": 3.00, "F3": 3.30, "F4": 3.10},
-        "D": {"F1": 4.50, "F2": 4.20, "F3": 4.60, "F4": 4.30},
-        "E": {"F1": 6.00, "F2": 5.50, "F3": 6.20, "F4": 5.80},
-    }
+    return dict(
+        I=I_names, J=J_names, K=K_names, L=L_names,
+        V=V, price=price, demand=demand, penalty=penalty,
+        prod_cost=prod_cost, prod_time=prod_time, cap=cap,
+        wh_rent=wh_rent, wh_cap=wh_cap, store_rent=store_rent,
+        tc1=tc1, tc2=tc2
+    )
 
-    # 工廠工時上限 Cap_j
-    cap = {"F1": 9000, "F2": 9500, "F3": 8800, "F4": 9200}
 
-    # 倉庫固定費/容量
-    wh_rent = {"W1": 520000, "W2": 480000, "W3": 500000, "W4": 560000, "W5": 450000, "W6": 430000}
-    wh_cap  = {"W1":     380, "W2":     360, "W3":     400, "W4":     450, "W5":     340, "W6":     320}
+def get_default_params(
+    I: int = 2,
+    J: int = 2,
+    K: int = 1,
+    L: int = 2,
+    **overrides
+):
+    """
+    取得「預設參數集」——語意等同於 C++ 的 default_sc_params(I,J,K,L)。
 
-    # 門市固定費
-    store_rent = {"S1": 1300000, "S2": 900000, "S3": 950000, "S4": 1100000,
-                  "S5": 1050000, "S6": 1200000, "S7": 850000, "S8": 800000}
+    參數
+    ----
+    I, J, K, L : int
+        產品/工廠/倉庫/門市數量。
+    **overrides :
+        若需要，還可同時覆蓋 gen_params() 內其他超參數，例如：
+        margin_frac=0.3, tc1_base=6, tc2_base=7, demand_base=15, ...
 
-    # 工廠→倉庫 運費 TC1_{j,k}（每立方公尺）
-    tc1 = {
-        "F1": {"W1":110, "W2":160, "W3":300, "W4":420, "W5":260, "W6":380},
-        "F2": {"W1":140, "W2": 90, "W3":210, "W4":390, "W5":180, "W6":420},
-        "F3": {"W1":200, "W2":140, "W3":150, "W4":280, "W5":120, "W6":300},
-        "F4": {"W1":250, "W2":190, "W3":170, "W4":240, "W5":160, "W6":260},
-    }
+    回傳
+    ----
+    dict
+        與 gen_params() 相同結構：
+        {
+          "I": [...], "J": [...], "K": [...], "L": [...],
+          "V": {...}, "price": {...}, "demand": {...}, "penalty": {...},
+          "prod_cost": {...}, "prod_time": {...}, "cap": {...},
+          "wh_rent": {...}, "wh_cap": {...}, "store_rent": {...},
+          "tc1": {...}, "tc2": {...}
+        }
+    """
+    return gen_params(I=I, J=J, K=K, L=L, **overrides)
 
-    # 倉庫→門市 運費 TC2_{k,l}（每立方公尺）
-    tc2 = {
-        "W1": {"S1":130, "S2":110, "S3":210, "S4":520, "S5":240, "S6":190, "S7":260, "S8":350},
-        "W2": {"S1":240, "S2":130, "S3": 90, "S4":260, "S5":200, "S6":160, "S7":220, "S8":300},
-        "W3": {"S1":560, "S2":360, "S3":210, "S4":110, "S5":260, "S6":220, "S7":180, "S8":240},
-        "W4": {"S1":160, "S2":320, "S3":460, "S4":820, "S5":180, "S6":140, "S7":200, "S8":260},
-        "W5": {"S1":220, "S2":180, "S3":240, "S4":300, "S5":140, "S6":120, "S7":160, "S8":200},
-        "W6": {"S1":190, "S2":260, "S3":420, "S4":780, "S5":210, "S6":170, "S7":230, "S8":290},
-    }
 
-    return dict(I=I, J=J, K=K, L=L,
-                V=V, price=price, demand=demand, penalty=penalty,
-                prod_cost=prod_cost, prod_time=prod_time, cap=cap,
-                wh_rent=wh_rent, wh_cap=wh_cap, store_rent=store_rent,
-                tc1=tc1, tc2=tc2)
+# 方便的別名（若你想用和 C++ 一樣的函式名）
+default_sc_params = get_default_params
