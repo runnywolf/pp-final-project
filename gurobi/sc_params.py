@@ -27,20 +27,20 @@ def gen_params(
     vol_start: int = 1, vol_step: int = 1,
     # 工時
     time_base: int = 1, time_parity_bonus: int = 1,
-    # 生產成本
-    cost_base: int = 200, cost_step: int = 100, cost_grad_pct: int = 8,
+    # 生產成本（↓）
+    cost_base: int = 120, cost_step: int = 60, cost_grad_pct: int = 5,
     # 需求
     demand_base: int = 20, demand_i_step: int = 5, demand_l_step: int = 3,
-    # 運費（以體積計）
-    tc1_base: int = 8, tc2_base: int = 9, tc_step: int = 2,
-    # 價格與懲罰
-    margin_frac: float = 0.25, margin_floor_base: int = 20, margin_floor_step: int = 5,
-    penalty_frac: float = 0.6,
-    # 產能與倉容
-    cap_util: float = 0.7, cap_buffer: int = 50, wh_capacity_share: float = 0.5,
-    # 固定費（小）
-    wh_rent_base: int = 2000, wh_rent_step: int = 200,
-    store_rent_base: int = 6000, store_rent_step: int = 500,
+    # 運費（↓）
+    tc1_base: int = 3, tc2_base: int = 4, tc_step: int = 1,
+    # 價格與懲罰（↑ 毛利、↓ 懲罰）
+    margin_frac: float = 0.35, margin_floor_base: int = 40, margin_floor_step: int = 10,
+    penalty_frac: float = 0.20,
+    # 產能與倉容（↑）
+    cap_util: float = 1.0, cap_buffer: int = 30, wh_capacity_share: float = 1.0,
+    # 固定費（↓）
+    wh_rent_base: int = 500, wh_rent_step: int = 100,
+    store_rent_base: int = 1500, store_rent_step: int = 200,
 ):
     # === 集合 ===
     I_names: List[str] = _make_product_names(I)
@@ -161,10 +161,10 @@ def gen_params(
 
 
 def get_default_params(
-    I: int = 2,
-    J: int = 2,
-    K: int = 1,
-    L: int = 2,
+    I: int = 5,
+    J: int = 5,
+    K: int = 5,
+    L: int = 5,
     **overrides
 ):
     """

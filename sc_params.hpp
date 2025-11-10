@@ -62,52 +62,49 @@ struct SCGenCfg {
   // 尺寸
   int I = 3, J = 2, K = 1, L = 2;
 
-  // 體積 V_i = vol_start + i * vol_step
+  // 體積
   int vol_start = 1;
   int vol_step  = 1;
 
-  // 單位工時 T_{i,j} = time_base + i + (j%2)*time_parity_bonus
+  // 單位工時（維持簡單）
   int time_base = 1;
   int time_parity_bonus = 1;
 
-  // 生產成本 base_cost_i = cost_base + cost_step * i
-  // 各工廠再乘上 (100 + shift)/100，其中 shift 線性分佈於 [-cost_grad_pct, +cost_grad_pct]
-  int cost_base = 200;
-  int cost_step = 100;
-  int cost_grad_pct = 8; // 0~100, 代表 ±%
+  // 生產成本（↓ 讓變便宜）
+  int cost_base = 120;   // 原 200
+  int cost_step = 60;    // 原 100
+  int cost_grad_pct = 5; // 原 8
 
-  // 需求 D_{i,l} = demand_base + demand_i_step*i + demand_l_step*(l%4)
+  // 需求（不動：由你場景決定）
   int demand_base    = 20;
   int demand_i_step  = 5;
   int demand_l_step  = 3;
 
-  // 運費（以體積計）：TC1_{j,k} = tc1_base + tc_step*((j%3)+(k%4))
-  //                     TC2_{k,l} = tc2_base + tc_step*((k%4)+(l%4))
-  int tc1_base = 8;
-  int tc2_base = 9;
-  int tc_step  = 2;
+  // 運費（以體積計，↓）
+  int tc1_base = 3;  // 原 8
+  int tc2_base = 4;  // 原 9
+  int tc_step  = 1;  // 原 2
 
-  // 售價 price[i][l] = minProd_i + V_i * minShipPerVol_l + margin_i
-  // margin_i = max( floor(margin_frac * minProd_i), margin_floor_base + margin_floor_step*i )
-  double margin_frac = 0.25; // 25% of min production cost
-  int    margin_floor_base = 20;
-  int    margin_floor_step = 5;
+  // 價格毛利（↑ 讓單件毛利更厚）
+  double margin_frac = 0.35; // 原 0.25
+  int    margin_floor_base = 40; // 原 20
+  int    margin_floor_step = 10; // 原 5
 
-  // 未滿足懲罰：penalty = floor(penalty_frac * price)
-  double penalty_frac = 0.6;
+  // 未滿足懲罰（↓）
+  double penalty_frac = 0.20; // 原 0.6
 
-  // 工廠工時上限：Cap_j ≈ cap_util × (總需求工時 / J) + cap_buffer
-  double cap_util   = 0.7; // 70% 目標稼動
-  int    cap_buffer = 50;  // 小緩衝
+  // 產能（↑ 讓可供應量更足，避免卡產能而不得不吃罰）
+  double cap_util   = 1.0; // 原 0.7
+  int    cap_buffer = 30;  // 原 50（適度即可）
 
-  // 倉庫吞吐容量：wh_cap ≈ wh_capacity_share × (總需求體積 / K)，至少 1
-  double wh_capacity_share = 0.5;
+  // 倉庫吞吐容量（↑）
+  double wh_capacity_share = 1.0; // 原 0.5
 
-  // 固定費（小）：避免壓過利潤
-  int wh_rent_base   = 2000;
-  int wh_rent_step   = 200;
-  int store_rent_base= 6000;
-  int store_rent_step= 500;
+  // 固定費（↓ 大幅降低啟用門檻）
+  int wh_rent_base   = 500;  // 原 2000
+  int wh_rent_step   = 100;  // 原 200
+  int store_rent_base= 1500; // 原 6000
+  int store_rent_step= 200;  // 原 500
 };
 
 // ===================
@@ -260,7 +257,7 @@ inline SCParams make_sc_params(const SCGenCfg& C) {
 // -------------------
 // 便利介面：保留舊版 API（預設尺寸）
 // -------------------
-inline SCParams default_sc_params(int I = 2, int J = 2, int K = 1, int L = 2) {
+inline SCParams default_sc_params(int I = 5, int J = 5, int K = 5, int L = 5) {
   SCGenCfg cfg;
   cfg.I = I; cfg.J = J; cfg.K = K; cfg.L = L;
   return make_sc_params(cfg);
