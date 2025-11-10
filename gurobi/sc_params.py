@@ -161,10 +161,10 @@ def gen_params(
 
 
 def get_default_params(
-    I: int = 5,
-    J: int = 5,
-    K: int = 5,
-    L: int = 5,
+    I: int = 3,
+    J: int = 3,
+    K: int = 3,
+    L: int = 3,
     **overrides
 ):
     """

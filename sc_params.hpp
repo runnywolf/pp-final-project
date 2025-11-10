@@ -257,7 +257,7 @@ inline SCParams make_sc_params(const SCGenCfg& C) {
 // -------------------
 // 便利介面：保留舊版 API（預設尺寸）
 // -------------------
-inline SCParams default_sc_params(int I = 5, int J = 5, int K = 5, int L = 5) {
+inline SCParams default_sc_params(int I = 3, int J = 3, int K = 3, int L = 3) {
   SCGenCfg cfg;
   cfg.I = I; cfg.J = J; cfg.K = K; cfg.L = L;
   return make_sc_params(cfg);
