@@ -678,8 +678,9 @@ public:
 		printf("%.2f\n", extremum);
 
 		printf("IP solution: ");
-		for (size_t i = 0; i < solution.size(); i++)
-			printf("%s = %.2f; ", bimap.getVarName((uint32_t)i).c_str(), solution[i]);
+		for (size_t i = 0; i < solution.size(); i++) {
+			printf("%s = %d; ", bimap.getVarName(i).c_str(), (int32_t)solution[i]);
+		}
 		printf("\n");
 
 		printf("Number of LP nodes solved: %u\n", nodeSolvedCount);
