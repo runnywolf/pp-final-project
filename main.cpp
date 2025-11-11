@@ -31,17 +31,17 @@ public:
 };
 
 // 平行化區域 start
-#include <omp.h>
-#include <immintrin.h>
+bool enableMatrixEliminationParallel = false; // 啟用矩陣列運算 avx256 向量化加速
 
 // 平行化版本的 array elimination, 用 A_{ij} 消去行 j 的其他元素, 並將列 i 同除 A_{ij}, 使 A_{ij} = 1
+#include <omp.h>
+#include <immintrin.h>
 void parallelArrayElimination(uint32_t cols, vector<double>& arr, uint32_t i, uint32_t j) { // arr 是扁平化的二維陣列
 	uint32_t rows = arr.size() / cols;
 	
 	const uint32_t simdWidth = 4; // 一次處理 4 個 double
 	double* ptrRowI = arr.data() + cols * (size_t)(i); // A_{i0} 的指標
 	
-	#pragma omp parallel for
 	for (uint32_t k = 0; k < rows; k++) { // k 為每個 pthread 負責的列運算 row 編號, 將列 i 乘常數消去列 k
 		if (k == i) continue; // 列 i 不能消去列 i
 		
@@ -63,7 +63,6 @@ void parallelArrayElimination(uint32_t cols, vector<double>& arr, uint32_t i, ui
 	const double aij = arr[cols * i + j];
 	for (uint32_t k = 0; k < cols; k++) arr[cols * i + k] /= aij; // 列 i 同除 A_{ij}, 使 A_{ij} = 1
 }
-
 // 平行化區域 end
 
 // 以下為單執行序的原始演算法
@@ -240,8 +239,10 @@ private:
 		}
 		
 		void elimination(uint32_t i, uint32_t j) { // 用 A_{ij} 消去行 j 的其他元素, 並將列 i 同除 A_{ij}, 使 A_{ij} = 1
-			parallelArrayElimination(cols, arr, i, j);
-			return; // [debug] 目前正在嘗試加速, 所以跳過原始演算法
+			if (enableMatrixEliminationParallel) { // 啟用矩陣列運算 avx256 向量化加速
+				parallelArrayElimination(cols, arr, i, j);
+				return; // 跳過原始演算法
+			}
 			
 			const double aij = arr_(i, j);
 			for (uint32_t k = 0; k < rows; k++) if (k != i) addRowToRow(i, k, -arr_(k, j) / aij); // 用 A_{ij} 消去行 j 的其他元素
@@ -634,7 +635,7 @@ public:
 		extremum = objValueUpperBound * (isMin ? 1 : -1); // 極值
 	}
 	
-	void solveParallel() { // 計算 IP 問題 (node queue level parallel)
+	void solveParallel() { // 計算 IP 問題 (node level parallel)
 		init();
 		
 		#pragma omp parallel  // 建立一個執行緒池
@@ -836,14 +837,16 @@ public:
 
 #include "sc_params.hpp"
 #include "sc_model.cpp"
-int32_t main() {
+int32_t main(int argc, char* argv[]) {
+	enableMatrixEliminationParallel = true; // 啟用矩陣列運算 avx256 向量化加速
+	bool enableNodeLevelParallel = false; // node queue 會一次 pop 多個 node 做平行化計算
+	
 	SCParams P = default_sc_params(); // 取參數 (可在 sc_params.hpp 改 default_sc_params() 內容)
 	IP ip = build_supply_chain_ip(P); // 用參數建 IP 模型 (目標 + 限制)
 	
 	printf("\n\n\n"); // 分隔用 (因為 node queue size 訊息會 flush 掉兩行)
 	auto start = chrono::high_resolution_clock::now(); // 測速
-	// ip.solve(); // 求 IP 的解, 並測速
-	ip.solveParallel();
+	enableNodeLevelParallel ? ip.solveParallel() : ip.solve();
 	auto end = chrono::high_resolution_clock::now();
 	printf("\n"); // 分隔用
 	
