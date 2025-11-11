@@ -40,7 +40,7 @@ void fastArrayElimination(uint32_t cols, vector<double>& arr, uint32_t i, uint32
 	const uint32_t simdWidth = 4; // 一次處理 4 個 double
 	double* ptrRowI = arr.data() + cols * (size_t)(i); // A_{i0} 的指標
 	
-	#pragma omp parallel for schedule(static)
+	#pragma omp parallel for
 	for (uint32_t k = 0; k < rows; k++) { // k 為每個 pthread 負責的列運算 row 編號, 將列 i 乘常數消去列 k
 		if (k == i) continue; // 列 i 不能消去列 i
 		
