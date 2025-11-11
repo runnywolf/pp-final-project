@@ -458,6 +458,8 @@ private:
 		}
 		
 		static double getSplitValue(pair<double, double> varRange, double varSolution) { // 根據某個基底變數的範圍和 LP 解, 決定切分值
+			return varSolution; // 後來發現直接這樣切會更快
+			
 			if (varRange.second == FP64_INF) return varSolution; // 將 [?, inf] 切分為 [?, sol] & [sol, inf]
 			return (varRange.first + varRange.second) / 2; // 將 [a, b] 根據中點 (a+b)/2 切分
 		} // 因為如果照著某個 LP solution 去分支 (投影片的演算法), 會嘗試對特定變數切 1000, 999, 998, ... (所以目前是直接對半切)
