@@ -13,7 +13,7 @@ using namespace std;
 
 class FOP {
 public:
-	static constexpr double EPS = 1e-9; // 浮點誤差
+	static constexpr double EPS = 1e-4; // 浮點誤差
 	
 	static bool isInt(double x) { // 浮點數 x 是否是整數
 		return abs(x - round(x)) <= EPS;
@@ -501,6 +501,10 @@ private:
 		void print(VarBimap bimap, bool showRange = false) {
 			if (type == Type::IP_FEASIBLE) {
 				printf("[IP solution found] Objective value = %.2f\n", lowerBound);
+			} else if (type == Type::INFEASIBLE) {
+				printf("IP solution is infeasible.\n");
+			} else if (type == Type::UNBOUNDED) {
+				printf("LP solution is unbounded, maybe IP solution does not exist.\n");
 			} else if (type == Type::LP_FEASIBLE) {
 				printf("IP feasible objective value >= %.2f\n", lowerBound);
 
@@ -508,30 +512,21 @@ private:
 				if (!varRangeLeft.empty() && !varRangeRight.empty()) {
 					for (size_t i = 0; i < solution.size(); ++i) {
 						if (varRangeLeft[i].first != varRangeRight[i].first) {
-							printf("Next split: %s = ",
-								bimap.getVarName((uint32_t)i).c_str());
-							printf("[%.2f %.2f] & ",
-								varRangeLeft[i].first,  varRangeLeft[i].second);
-							printf("[%.2f %.2f]\n",
-								varRangeRight[i].first, varRangeRight[i].second);
+							printf("Next split: %s = ", bimap.getVarName((uint32_t)i).c_str());
+							printf("[%.2f %.2f] & ", varRangeLeft[i].first, varRangeLeft[i].second);
+							printf("[%.2f %.2f]\n", varRangeRight[i].first, varRangeRight[i].second);
 							break;
 						}
 					}
 				}
-			} else if (type == Type::INFEASIBLE) {
-				printf("IP solution is infeasible.\n");
-			} else { // Type::UNBOUNDED
-				printf("LP solution is unbounded, maybe IP solution does not exist.\n");
 			}
 
-			if (showRange && type == Type::LP_FEASIBLE &&
-				!varRangeLeft.empty() && !varRangeRight.empty()) {
+			if (showRange && type == Type::LP_FEASIBLE && !varRangeLeft.empty() && !varRangeRight.empty()) {
 				printf("Left child node var range: ");
 				for (size_t vi = 0; vi < varRangeLeft.size(); ++vi) {
 					const auto &rng = varRangeLeft[vi];
 					if (rng.first != 0 || rng.second != FP64_INF) {
-						printf("%s = [%.2f, %.2f]; ",
-							bimap.getVarName((uint32_t)vi).c_str(), rng.first, rng.second);
+						printf("%s = [%.2f, %.2f]; ", bimap.getVarName((uint32_t)vi).c_str(), rng.first, rng.second);
 					}
 				}
 				printf("\n");
@@ -540,8 +535,7 @@ private:
 				for (size_t vi = 0; vi < varRangeRight.size(); ++vi) {
 					const auto &rng = varRangeRight[vi];
 					if (rng.first != 0 || rng.second != FP64_INF) {
-						printf("%s = [%.2f, %.2f]; ",
-							bimap.getVarName((uint32_t)vi).c_str(), rng.first, rng.second);
+						printf("%s = [%.2f, %.2f]; ", bimap.getVarName((uint32_t)vi).c_str(), rng.first, rng.second);
 					}
 				}
 				printf("\n");
@@ -628,6 +622,7 @@ public:
 		
 		extremum = objValueUpperBound * (isMin ? 1 : -1); // 極值
 	}
+	
 	void print_grouped_solution(bool show_zero = false) const {
 		struct Item { std::string name; double val; };
 		std::vector<Item> items;
@@ -666,6 +661,7 @@ public:
 		print_group("Y[", "Shipments WH→Store (Y[i,k,l]):");
 		print_group("U[", "Unmet demand (U[i,l]):");
 	}
+	
 	void print(bool showCon = false) {
 		if (showCon) {
 			printf(isMin ? "min " : "max -> min ");
@@ -687,11 +683,9 @@ public:
 		printf("\n");
 
 		printf("Number of LP nodes solved: %u\n", nodeSolvedCount);
-
-		// 新增：分組整潔輸出（不印 0）
+		
 		print_grouped_solution(true);
 	}
-
 };
 
 class Tester { // 有一些範例用來測試正確性
