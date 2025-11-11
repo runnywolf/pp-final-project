@@ -1,123 +1,264 @@
 #pragma once
 #include <string>
 #include <vector>
+#include <algorithm>
+#include <limits>
+#include <cmath>      // floor, round
 
+// ===================
+// 參數資料結構（沿用你的定義，以 double 存整數值）
+// ===================
 struct SCParams {
-  // ---- 集合（名稱只供變數命名好讀） ----
   std::vector<std::string> prod;   // I: 產品
   std::vector<std::string> fac;    // J: 工廠
   std::vector<std::string> wh;     // K: 倉庫
   std::vector<std::string> store;  // L: 門市
 
-  // ---- 產品體積 (立方公尺/件) V_i ----
-  std::vector<double> V; // size = |I|
+  std::vector<double> V; // |I| 產品體積（立方公尺/件）
 
-  // ---- 售價 p_{i,l}、需求上限 D_{i,l}、未滿足懲罰 M_{i,l} ----
-  std::vector<std::vector<double>> price;   // |I| x |L|
-  std::vector<std::vector<double>> demand;  // |I| x |L|
-  std::vector<std::vector<double>> penalty; // |I| x |L|
+  std::vector<std::vector<double>> price;   // |I| x |L| 售價
+  std::vector<std::vector<double>> demand;  // |I| x |L| 需求上限
+  std::vector<std::vector<double>> penalty; // |I| x |L| 未滿足懲罰
 
-  // ---- 生產成本 C_{i,j}、單位工時 T_{i,j}、工廠工時上限 Cap_j ----
-  std::vector<std::vector<double>> prod_cost; // |I| x |J|
-  std::vector<std::vector<double>> prod_time; // |I| x |J|
-  std::vector<double> cap; // |J|
+  std::vector<std::vector<double>> prod_cost; // |I| x |J| 生產成本
+  std::vector<std::vector<double>> prod_time; // |I| x |J| 單位工時
+  std::vector<double> cap; // |J| 工廠工時上限
 
-  // ---- 倉庫固定費 R_k、吞吐容量(體積) SCap_k ----
-  std::vector<double> wh_rent; // |K|
-  std::vector<double> wh_cap;  // |K|
+  std::vector<double> wh_rent; // |K| 倉庫固定費
+  std::vector<double> wh_cap;  // |K| 倉庫吞吐容量（以體積計）
 
-  // ---- 門市固定費 SR_l ----
-  std::vector<double> store_rent; // |L|
+  std::vector<double> store_rent; // |L| 門市固定費
 
-  // ---- 運費（以體積計價）----
-  // 工廠→倉庫 TC1_{j,k}；倉庫→門市 TC2_{k,l}
-  std::vector<std::vector<double>> tc1; // |J| x |K|
-  std::vector<std::vector<double>> tc2; // |K| x |L|
+  std::vector<std::vector<double>> tc1; // |J| x |K| 工廠→倉庫（單位體積）
+  std::vector<std::vector<double>> tc2; // |K| x |L| 倉庫→門市（單位體積）
 };
 
-// === 擴充版預設參數：I=5, J=4, K=6, L=8 ===
-inline SCParams default_sc_params() {
+// -------------------
+// 命名工具
+// -------------------
+inline std::vector<std::string> make_product_names(int n) {
+  std::vector<std::string> v;
+  v.reserve(n);
+  for (int i = 0; i < n; ++i) {
+    char base = 'A' + (i % 26);
+    int round = i / 26;
+    if (round == 0) v.emplace_back(std::string(1, base));
+    else v.emplace_back(std::string(1, base) + std::to_string(round + 1));
+  }
+  return v;
+}
+inline std::vector<std::string> make_seq_names(const char* prefix, int n) {
+  std::vector<std::string> v;
+  v.reserve(n);
+  for (int i = 0; i < n; ++i) v.emplace_back(std::string(prefix) + std::to_string(i+1));
+  return v;
+}
+
+// ===================
+// 參數生成「可調」超參數
+//  - 設計原則：數值偏小但合理、整數化、且保證單件正利潤
+// ===================
+struct SCGenCfg {
+  // 尺寸
+  int I = 3, J = 2, K = 1, L = 2;
+
+  // 體積
+  int vol_start = 1;
+  int vol_step  = 1;
+
+  // 單位工時（維持簡單）
+  int time_base = 1;
+  int time_parity_bonus = 1;
+
+  // 生產成本（↓ 讓變便宜）
+  int cost_base = 120;   // 原 200
+  int cost_step = 60;    // 原 100
+  int cost_grad_pct = 5; // 原 8
+
+  // 需求（不動：由你場景決定）
+  int demand_base    = 20;
+  int demand_i_step  = 5;
+  int demand_l_step  = 3;
+
+  // 運費（以體積計，↓）
+  int tc1_base = 3;  // 原 8
+  int tc2_base = 4;  // 原 9
+  int tc_step  = 1;  // 原 2
+
+  // 價格毛利（↑ 讓單件毛利更厚）
+  double margin_frac = 0.35; // 原 0.25
+  int    margin_floor_base = 40; // 原 20
+  int    margin_floor_step = 10; // 原 5
+
+  // 未滿足懲罰（↓）
+  double penalty_frac = 0.20; // 原 0.6
+
+  // 產能（↑ 讓可供應量更足，避免卡產能而不得不吃罰）
+  double cap_util   = 1.0; // 原 0.7
+  int    cap_buffer = 30;  // 原 50（適度即可）
+
+  // 倉庫吞吐容量（↑）
+  double wh_capacity_share = 1.0; // 原 0.5
+
+  // 固定費（↓ 大幅降低啟用門檻）
+  int wh_rent_base   = 500;  // 原 2000
+  int wh_rent_step   = 100;  // 原 200
+  int store_rent_base= 1500; // 原 6000
+  int store_rent_step= 200;  // 原 500
+};
+
+// ===================
+// 主要生成器：依 SCGenCfg 產生 SCParams（整數化 + 正利潤）
+// ===================
+inline SCParams make_sc_params(const SCGenCfg& C) {
   SCParams P;
-  P.prod  = {"A","B","C","D","E"};
-  P.fac   = {"F1","F2","F3","F4"};
-  P.wh    = {"W1","W2","W3","W4","W5","W6"};
-  P.store = {"S1","S2","S3","S4","S5","S6","S7","S8"};
 
-  // 體積 V_i
-  P.V = {0.08, 0.15, 0.35, 0.60, 1.20}; // A..E
+  // ---- 集合命名 ----
+  P.prod  = make_product_names(C.I);
+  P.fac   = make_seq_names("F", C.J);
+  P.wh    = make_seq_names("W", C.K);
+  P.store = make_seq_names("S", C.L);
 
-  // price[i][l]  (每列對應一個產品；欄序 S1..S8)
-  P.price = {
-    { 8300,  8200,  8100,  8050,  8150,  8250,  8000,  7950}, // A
-    {12400, 12500, 12300, 12100, 12250, 12450, 12000, 11950}, // B
-    {36000, 36200, 35800, 35500, 35750, 36100, 35300, 35200}, // C
-    {52000, 52500, 51500, 51000, 51200, 52300, 50800, 50600}, // D
-    {88000, 88500, 87500, 87000, 87200, 88200, 86800, 86600}  // E
-  };
+  // ---- 體積 V_i（整數）----
+  P.V.assign(C.I, 0.0);
+  for (int i = 0; i < C.I; ++i) {
+    int v = std::max(1, C.vol_start + C.vol_step * i);
+    P.V[i] = static_cast<double>(v);
+  }
 
-  // demand[i][l]  (每列產品；欄序 S1..S8)
-  P.demand = {
-    {2000, 1400, 1600, 1500, 1300, 1700, 1200, 1100}, // A
-    { 950,  800,  850,  820,  780,  900,  750,  700}, // B
-    { 300,  320,  220,  240,  210,  260,  200,  190}, // C
-    { 180,  150,  160,  140,  130,  170,  120,  110}, // D
-    {  90,   80,   70,   60,   55,   75,   50,   45}  // E
-  };
+  // ---- 單位工時 T_{i,j}（整數）----
+  P.prod_time.assign(C.I, std::vector<double>(C.J, 0.0));
+  for (int i = 0; i < C.I; ++i)
+    for (int j = 0; j < C.J; ++j) {
+      int t = C.time_base + i + (j % 2) * C.time_parity_bonus;
+      P.prod_time[i][j] = static_cast<double>(std::max(1, t));
+    }
 
-  // penalty[i][l]  (每列產品；欄序 S1..S8)
-  P.penalty = {
-    {2700, 2650, 2600, 2600, 2620, 2680, 2550, 2520}, // A
-    {4400, 4500, 4350, 4300, 4320, 4450, 4250, 4200}, // B
-    {8800, 8900, 8600, 8500, 8550, 8850, 8400, 8350}, // C
-    {15500,15800,15000,14800,14900,15600,14600,14500}, // D
-    {27000,27500,26200,25800,26000,27200,25500,25200}  // E
-  };
+  // ---- 生產成本 C_{i,j}（整數）----
+  // base_cost_i = cost_base + cost_step * i；工廠依位置給 ±cost_grad_pct 線性梯度
+  P.prod_cost.assign(C.I, std::vector<double>(C.J, 0.0));
+  for (int i = 0; i < C.I; ++i) {
+    int base_cost_i = std::max(1, C.cost_base + C.cost_step * i);
+    for (int j = 0; j < C.J; ++j) {
+      int shift = 0;
+      if (C.J > 1) {
+        // 線性由 -grad -> +grad
+        shift = (j * (2 * C.cost_grad_pct)) / (C.J - 1) - C.cost_grad_pct;
+      }
+      int cost_ij = base_cost_i * (100 + shift) / 100;
+      P.prod_cost[i][j] = static_cast<double>(std::max(1, cost_ij));
+    }
+  }
 
-  // prod_cost[i][j]  (列=產品 A..E；欄=工廠 F1..F4)
-  P.prod_cost = {
-    { 3800,  4000,  3950,  3850}, // A
-    { 6100,  6000,  6250,  6050}, // B
-    {22500, 21800, 23000, 22000}, // C
-    {32000, 31500, 33000, 31800}, // D
-    {54000, 53500, 55000, 54500}  // E
-  };
+  // ---- 需求 D_{i,l}（整數）----
+  P.demand.assign(C.I, std::vector<double>(C.L, 0.0));
+  for (int i = 0; i < C.I; ++i)
+    for (int l = 0; l < C.L; ++l) {
+      int d = C.demand_base + C.demand_i_step * i + C.demand_l_step * (l % 4);
+      P.demand[i][l] = static_cast<double>(std::max(0, d));
+    }
 
-  // prod_time[i][j]  (列=產品 A..E；欄=工廠 F1..F4)
-  P.prod_time = {
-    {0.90, 0.85, 0.95, 0.90}, // A
-    {1.50, 1.40, 1.55, 1.45}, // B
-    {3.20, 3.00, 3.30, 3.10}, // C
-    {4.50, 4.20, 4.60, 4.30}, // D
-    {6.00, 5.50, 6.20, 5.80}  // E
-  };
+  // ---- 運費（整數、以體積計）----
+  P.tc1.assign(C.J, std::vector<double>(C.K, 0.0));
+  for (int j = 0; j < C.J; ++j)
+    for (int k = 0; k < C.K; ++k) {
+      int v = C.tc1_base + C.tc_step * ((j % 3) + (k % 4));
+      P.tc1[j][k] = static_cast<double>(std::max(0, v));
+    }
 
-  // 工廠工時上限 Cap_j (F1..F4)
-  P.cap = {9000, 9500, 8800, 9200};
+  P.tc2.assign(C.K, std::vector<double>(C.L, 0.0));
+  for (int k = 0; k < C.K; ++k)
+    for (int l = 0; l < C.L; ++l) {
+      int v = C.tc2_base + C.tc_step * ((k % 4) + (l % 4));
+      P.tc2[k][l] = static_cast<double>(std::max(0, v));
+    }
 
-  // 倉庫固定費/容量 (W1..W6)
-  P.wh_rent = {520000, 480000, 500000, 560000, 450000, 430000};
-  P.wh_cap  = {    380,     360,     400,     450,     340,     320}; // 立方公尺
+  // ---- 計算 min 生產成本 & 最便宜單位體積運價（保證正利潤）----
+  std::vector<int> minProd(C.I, 0);
+  for (int i = 0; i < C.I; ++i) {
+    int mn = std::numeric_limits<int>::max();
+    for (int j = 0; j < C.J; ++j) mn = std::min(mn, static_cast<int>(P.prod_cost[i][j]));
+    minProd[i] = mn;
+  }
+  std::vector<int> minShipPerVol(C.L, 0);
+  for (int l = 0; l < C.L; ++l) {
+    int best = std::numeric_limits<int>::max();
+    for (int k = 0; k < C.K; ++k) {
+      int bestF = std::numeric_limits<int>::max();
+      for (int j = 0; j < C.J; ++j)
+        bestF = std::min(bestF, static_cast<int>(P.tc1[j][k]));
+      int total = bestF + static_cast<int>(P.tc2[k][l]);
+      best = std::min(best, total);
+    }
+    minShipPerVol[l] = best; // 每立方公尺的最便宜路徑成本
+  }
 
-  // 門市固定費 (S1..S8)
-  P.store_rent = {1300000, 900000, 950000, 1100000, 1050000, 1200000, 850000, 800000};
+  // ---- 售價（整數，確保單件正利潤）----
+  P.price.assign(C.I, std::vector<double>(C.L, 0.0));
+  for (int i = 0; i < C.I; ++i) {
+    int base_margin = static_cast<int>(std::floor(minProd[i] * C.margin_frac));
+    base_margin = std::max(base_margin, C.margin_floor_base + C.margin_floor_step * i);
+    base_margin = std::max(1, base_margin);
+    for (int l = 0; l < C.L; ++l) {
+      int ship = static_cast<int>(P.V[i]) * std::max(0, minShipPerVol[l]);
+      int price_il = minProd[i] + ship + base_margin;
+      // 下限：至少比 (minProd + ship) 多 1，避免 margin=0
+      price_il = std::max(price_il, minProd[i] + ship + 1);
+      P.price[i][l] = static_cast<double>(price_il);
+    }
+  }
 
-  // 運費 TC1_{j,k} (列=F1..F4；欄=W1..W6)
-  P.tc1 = {
-    {110, 160, 300, 420, 260, 380}, // F1
-    {140,  90, 210, 390, 180, 420}, // F2
-    {200, 140, 150, 280, 120, 300}, // F3
-    {250, 190, 170, 240, 160, 260}  // F4
-  };
+  // ---- 未滿足懲罰（整數）----
+  P.penalty.assign(C.I, std::vector<double>(C.L, 0.0));
+  for (int i = 0; i < C.I; ++i)
+    for (int l = 0; l < C.L; ++l) {
+      int pen = static_cast<int>(std::floor(P.price[i][l] * C.penalty_frac));
+      P.penalty[i][l] = static_cast<double>(std::max(0, pen));
+    }
 
-  // 運費 TC2_{k,l} (列=W1..W6；欄=S1..S8)
-  P.tc2 = {
-    {130,110,210,520,240,190,260,350}, // W1
-    {240,130, 90,260,200,160,220,300}, // W2
-    {560,360,210,110,260,220,180,240}, // W3
-    {160,320,460,820,180,140,200,260}, // W4
-    {220,180,240,300,140,120,160,200}, // W5
-    {190,260,420,780,210,170,230,290}  // W6
-  };
+  // ---- 工廠工時上限 Cap_j（整數）----
+  std::vector<int> sumD(C.I, 0);
+  for (int i = 0; i < C.I; ++i) {
+    int s = 0; for (int l = 0; l < C.L; ++l) s += static_cast<int>(P.demand[i][l]);
+    sumD[i] = s;
+  }
+  P.cap.assign(C.J, 0.0);
+  for (int j = 0; j < C.J; ++j) {
+    long long hours = 0;
+    for (int i = 0; i < C.I; ++i)
+      hours += 1LL * sumD[i] * static_cast<int>(P.prod_time[i][j]);
+    long long capj = static_cast<long long>(std::floor((hours / std::max(1, C.J)) * C.cap_util))
+                   + C.cap_buffer;
+    P.cap[j] = static_cast<double>(std::max<long long>(1, capj));
+  }
+
+  // ---- 倉庫吞吐容量 wh_cap（整數體積）----
+  long long totalVol = 0;
+  for (int i = 0; i < C.I; ++i)
+    totalVol += 1LL * sumD[i] * static_cast<int>(P.V[i]);
+  P.wh_cap.assign(C.K, 0.0);
+  for (int k = 0; k < C.K; ++k) {
+    long long capk = static_cast<long long>(std::floor((totalVol * C.wh_capacity_share) / std::max(1, C.K)));
+    P.wh_cap[k] = static_cast<double>(std::max<long long>(1, capk));
+  }
+
+  // ---- 固定費（整數，小）----
+  P.wh_rent.assign(C.K, 0.0);
+  for (int k = 0; k < C.K; ++k)
+    P.wh_rent[k] = static_cast<double>(C.wh_rent_base + C.wh_rent_step * (k + 1));
+
+  P.store_rent.assign(C.L, 0.0);
+  for (int l = 0; l < C.L; ++l)
+    P.store_rent[l] = static_cast<double>(C.store_rent_base + C.store_rent_step * (l + 1));
 
   return P;
+}
+
+// -------------------
+// 便利介面：保留舊版 API（預設尺寸）
+// -------------------
+inline SCParams default_sc_params(int I = 3, int J = 3, int K = 3, int L = 3) {
+  SCGenCfg cfg;
+  cfg.I = I; cfg.J = J; cfg.K = K; cfg.L = L;
+  return make_sc_params(cfg);
 }

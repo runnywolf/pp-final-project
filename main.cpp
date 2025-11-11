@@ -2,17 +2,19 @@
 #include <cstdint> // uint32_t
 #include <cmath>
 #include <string>
+#include <algorithm>   // for std::sort
 #include <limits> // fp64 inf, nan
 #include <vector>
 #include <unordered_map> // map
 #include <queue> // min-heap
 #include <chrono> // 測速
+#include <optional>
 
 using namespace std;
 
 class FOP {
 public:
-	static constexpr double EPS = 1e-4; // 浮點誤差
+	static constexpr double EPS = 1e-9; // 浮點誤差
 	
 	static bool isInt(double x) { // 浮點數 x 是否是整數
 		return abs(x - round(x)) <= EPS;
@@ -38,7 +40,7 @@ void fastArrayElimination(uint32_t cols, vector<double>& arr, uint32_t i, uint32
 	const uint32_t simdWidth = 4; // 一次處理 4 個 double
 	double* ptrRowI = arr.data() + cols * (size_t)(i); // A_{i0} 的指標
 	
-	#pragma omp parallel for
+	#pragma omp parallel for schedule(static)
 	for (uint32_t k = 0; k < rows; k++) { // k 為每個 pthread 負責的列運算 row 編號, 將列 i 乘常數消去列 k
 		if (k == i) continue; // 列 i 不能消去列 i
 		
@@ -81,7 +83,7 @@ private:
 	vector<string> indexToStr;
 
 public:
-	uint32_t getVarCount() { // 獲取已註冊變數的數量
+	uint32_t getVarCount() const { // 獲取已註冊變數的數量
 		return indexToStr.size();
 	}
 	
@@ -94,7 +96,7 @@ public:
 		return newVarIndex; // 回傳分配的新編號
 	}
 	
-	string getVarName(uint32_t varIndex) { // 編號 j (x_j) 轉字串變數
+	string getVarName(uint32_t varIndex) const { // 編號 j (x_j) 轉字串變數
 		if (varIndex <= indexToStr.size() - 1) return indexToStr[varIndex];
 		return "[unknown-var]";
 	}
@@ -342,7 +344,7 @@ private:
 		for (Constraint& con: multiCon) setTableauRow(con);
 		for (Constraint& con: varRangeMultiCon) setTableauRow(con);
 	}
-	
+
 	bool checkInfeasible() { // 檢查是否無解, 並做處理, 若無解則回傳 false, 非無解則回傳 true
 		if (!isTableauHaveArtificialVar()) return true; // 如果不存在 artificial var, 跳過這一步
 		
@@ -497,34 +499,55 @@ private:
 			}
 		}
 		
-		void print(VarBimap bimap, bool showRange = false) { // debug
-			if (type == Type::IP_FEASIBLE) printf("[IP solution found] Objective value = %.2f\n", lowerBound);
-			else if (type == Type::LP_FEASIBLE) printf("IP feasible objective value >= %.2f\n", lowerBound);
-			else if (type == Type::INFEASIBLE) printf("IP solution is infeasible.\n");
-			else if (type == Type::UNBOUNDED) printf("LP solution is unbounded, maybe IP solution does not exist.\n");
-			
-			for (size_t i = 0; i < solution.size(); i++) if (varRangeLeft[i].first != varRangeRight[i].first) { // 印出下一次分支的分割條件
-				printf("Next split: %s = ", bimap.getVarName(i).c_str());
-				printf("[%.2f %.2f] & ", varRangeLeft[i].first, varRangeLeft[i].second);
-				printf("[%.2f %.2f]\n", varRangeRight[i].first, varRangeRight[i].second);
-				break;
+		void print(VarBimap bimap, bool showRange = false) {
+			if (type == Type::IP_FEASIBLE) {
+				printf("[IP solution found] Objective value = %.2f\n", lowerBound);
+			} else if (type == Type::LP_FEASIBLE) {
+				printf("IP feasible objective value >= %.2f\n", lowerBound);
+
+				// 只有 LP_FEASIBLE 才會有左右子區間；先檢查向量是否為空
+				if (!varRangeLeft.empty() && !varRangeRight.empty()) {
+					for (size_t i = 0; i < solution.size(); ++i) {
+						if (varRangeLeft[i].first != varRangeRight[i].first) {
+							printf("Next split: %s = ",
+								bimap.getVarName((uint32_t)i).c_str());
+							printf("[%.2f %.2f] & ",
+								varRangeLeft[i].first,  varRangeLeft[i].second);
+							printf("[%.2f %.2f]\n",
+								varRangeRight[i].first, varRangeRight[i].second);
+							break;
+						}
+					}
+				}
+			} else if (type == Type::INFEASIBLE) {
+				printf("IP solution is infeasible.\n");
+			} else { // Type::UNBOUNDED
+				printf("LP solution is unbounded, maybe IP solution does not exist.\n");
 			}
-			
-			if (!showRange) return;
-			
-			printf("Left child node var range: ");
-			uint32_t varIndex = 0;
-			for (auto& [varMin, varMax]: varRangeLeft) if (varMin != 0 || varMax != FP64_INF) {
-				printf("%s = [%.2f, %.2f]; ", bimap.getVarName(varIndex++).c_str(), varMin, varMax);
+
+			if (showRange && type == Type::LP_FEASIBLE &&
+				!varRangeLeft.empty() && !varRangeRight.empty()) {
+				printf("Left child node var range: ");
+				for (size_t vi = 0; vi < varRangeLeft.size(); ++vi) {
+					const auto &rng = varRangeLeft[vi];
+					if (rng.first != 0 || rng.second != FP64_INF) {
+						printf("%s = [%.2f, %.2f]; ",
+							bimap.getVarName((uint32_t)vi).c_str(), rng.first, rng.second);
+					}
+				}
+				printf("\n");
+
+				printf("Right child node var range: ");
+				for (size_t vi = 0; vi < varRangeRight.size(); ++vi) {
+					const auto &rng = varRangeRight[vi];
+					if (rng.first != 0 || rng.second != FP64_INF) {
+						printf("%s = [%.2f, %.2f]; ",
+							bimap.getVarName((uint32_t)vi).c_str(), rng.first, rng.second);
+					}
+				}
+				printf("\n");
+
 			}
-			printf("\n");
-			
-			printf("Right child node var range: ");
-			varIndex = 0;
-			for (auto& [varMin, varMax]: varRangeRight) if (varMin != 0 || varMax != FP64_INF) {
-				printf("%s = [%.2f, %.2f]; ", bimap.getVarName(varIndex++).c_str(), varMin, varMax);
-			}
-			printf("\n");
 		}
 	};
 	
@@ -546,7 +569,7 @@ private:
 	}
 	
 	void checkNode(Node& node) { // 檢查一個 node 的 solution type, 決定是否要更新全域上界或推入 min heap
-		printf("node queue size = %d; ", nodeQueue.size()); node.print(bimap); // [debug]
+		printf("node queue size = %zu; ", nodeQueue.size()); node.print(bimap); // [debug]
 		
 		if (node.type == Node::Type::IP_FEASIBLE && node.lowerBound < objValueUpperBound) {
 			solutionType = Type::BOUNDED;
@@ -590,44 +613,129 @@ public:
 		
 		return *this;
 	}
-	
-	void solve() { // 計算 IP 問題
-		init(); // 生成初始 node 並 push 進 min-heap
+
+	// void solve() { // 計算 IP 問題
+	// 	init(); // 生成初始 node 並 push 進 min-heap
 		
-		while (nodeQueue.size() > 0 && solutionType != Type::UNBOUNDED) { // min-heap 還有 node 就繼續分支, 目前 unbounded 會強制停下
-			Node node = nodeQueue.top(); // 取出下界較小的 node 比較容易找到更小的解
-			nodeQueue.pop();
+	// 	while (nodeQueue.size() > 0 && solutionType != Type::UNBOUNDED) { // min-heap 還有 node 就繼續分支, 目前 unbounded 會強制停下
+	// 		Node node = nodeQueue.top(); // 取出下界較小的 node 比較容易找到更小的解
+	// 		nodeQueue.pop();
 			
-			Node leftChildNode(objFunc, multiCon, node.varRangeLeft); // 生成並計算左子節點的 LP 問題
-			checkNode(leftChildNode); // 檢查 child node 的解
-			Node rightChildNode(objFunc, multiCon, node.varRangeRight); // 生成並計算右子節點的 LP 問題
-			checkNode(rightChildNode);
+	// 		Node leftChildNode(objFunc, multiCon, node.varRangeLeft); // 生成並計算左子節點的 LP 問題
+	// 		checkNode(leftChildNode); // 檢查 child node 的解
+	// 		Node rightChildNode(objFunc, multiCon, node.varRangeRight); // 生成並計算右子節點的 LP 問題
+	// 		checkNode(rightChildNode);
+	// 	}
+		
+	// 	extremum = objValueUpperBound * (isMin ? 1 : -1); // 極值
+	// }
+
+	void solve() {
+		init();
+		
+		#pragma omp parallel  // 建立一個執行緒池
+		{
+			// 每個執行緒都會執行這個 while 迴圈
+			while (true) {
+				std::optional<Node> nodeOpt;
+				
+				// ========== 關鍵區域 1: 取出工作 ==========
+				#pragma omp critical  // 同一時間只有一個執行緒可以進入
+				{
+					if (nodeQueue.size() > 0 && solutionType != Type::UNBOUNDED) {
+						nodeOpt = nodeQueue.top();  // 取出優先度最高的 node
+						nodeQueue.pop();             // 從 queue 移除
+					}
+				}
+				// ==========================================
+				
+				if (!nodeOpt.has_value()) break;  // 沒工作了，結束
+				
+				Node& node = nodeOpt.value();
+				
+				// ========== 平行計算區域（不需要同步）==========
+				// 每個執行緒獨立計算自己的 LP 子問題
+				Node leftChildNode(objFunc, multiCon, node.varRangeLeft);   // 計算左子樹
+				Node rightChildNode(objFunc, multiCon, node.varRangeRight); // 計算右子樹
+				// ==========================================
+				
+				// ========== 關鍵區域 2: 更新結果 ==========
+				#pragma omp critical  // 同步更新共享資料
+				{
+					checkNode(leftChildNode);   // 可能更新 objValueUpperBound
+					checkNode(rightChildNode);  // 可能將新 node 加入 queue
+				}
+				// ==========================================
+			}
 		}
 		
-		extremum = objValueUpperBound * (isMin ? 1 : -1); // 極值
+		extremum = objValueUpperBound * (isMin ? 1 : -1);
 	}
-	
-	void print(bool showCon = false) { // debug
-		if (showCon) {
-			printf(isMin ? "min " : "max -> min "); // 印出目標函數
-			objFunc.print(bimap);
-			for (Constraint& con: multiCon) con.print(bimap); // 印出約束
+
+	void print_grouped_solution(bool show_zero = false) const {
+		struct Item { std::string name; double val; };
+		std::vector<Item> items;
+		items.reserve(solution.size());
+		for (size_t i = 0; i < solution.size(); ++i) {
+			items.push_back({ bimap.getVarName((uint32_t)i), solution[i] });
 		}
-		
-		printf("Type: "); // 印出 LP 的解的類型
+
+		auto is_zero = [](double x){ return std::abs(x) <= FOP::EPS; };
+		auto print_group = [&](const std::string& prefix, const char* title) {
+			std::vector<Item> g;
+			for (const auto& it : items) {
+				// 以字首判斷群組：P[, X[, Y[, U[, W[, S[
+				if (it.name.rfind(prefix, 0) == 0) {
+					if (show_zero || !is_zero(it.val)) g.push_back(it);
+				}
+			}
+			if (g.empty()) return;
+			std::sort(g.begin(), g.end(), [](const Item& a, const Item& b){
+				return a.name < b.name;
+			});
+			printf("%s\n", title);
+			for (const auto& it : g) {
+				if (FOP::isInt(it.val))
+					printf("  %-28s = %.0f\n", it.name.c_str(), std::round(it.val));
+				else
+					printf("  %-28s = %.4f\n", it.name.c_str(), it.val);
+			}
+		};
+
+		// 你可依需求調整順序
+		print_group("W[", "Warehouses open (W_k):");
+		print_group("S[", "Stores open (S_l):");
+		print_group("P[", "Production (P[i,j]):");
+		print_group("X[", "Shipments Factory→WH (X[i,j,k]):");
+		print_group("Y[", "Shipments WH→Store (Y[i,k,l]):");
+		print_group("U[", "Unmet demand (U[i,l]):");
+	}
+	void print(bool showCon = false) {
+		if (showCon) {
+			printf(isMin ? "min " : "max -> min ");
+			objFunc.print(bimap);
+			for (Constraint& con: multiCon) con.print(bimap);
+		}
+
+		printf("Type: ");
 		if (solutionType == Type::BOUNDED) printf("Bounded\n");
 		else if (solutionType == Type::UNBOUNDED) printf("Unbounded\n");
-		else if (solutionType == Type::INFEASIBLE) printf("Infeasible\n");
-		
-		printf(isMin ? "IP Minimum = " : "IP Maximum = "); // 印出極值
+		else printf("Infeasible\n");
+
+		printf(isMin ? "IP Minimum = " : "IP Maximum = ");
 		printf("%.2f\n", extremum);
-		
-		printf("IP solution: "); // 印出 IP 解
-		for (size_t i = 0; i < solution.size(); i++) printf("%s = %.2f; ", bimap.getVarName(i).c_str(), solution[i]);
+
+		printf("IP solution: ");
+		for (size_t i = 0; i < solution.size(); i++)
+			printf("%s = %.2f; ", bimap.getVarName((uint32_t)i).c_str(), solution[i]);
 		printf("\n");
-		
-		printf("Number of LP nodes solved: %d\n", nodeSolvedCount);
+
+		printf("Number of LP nodes solved: %u\n", nodeSolvedCount);
+
+		// 新增：分組整潔輸出（不印 0）
+		print_grouped_solution(true);
 	}
+
 };
 
 class Tester { // 有一些範例用來測試正確性
@@ -732,8 +840,12 @@ int32_t main() {
 	IP ip = build_supply_chain_ip(P);
 
 	// 3) 求解、印結果
+	chrono::high_resolution_clock::time_point t1 = chrono::high_resolution_clock::now();
 	ip.solve();
+	chrono::high_resolution_clock::time_point t2 = chrono::high_resolution_clock::now();
+	double duration = chrono::duration<double, milli>(t2 - t1).count();
 	ip.print();
+	printf("Total IP solving time: %.2f ms\n", duration);
 
 	return 0;
 }
