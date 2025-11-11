@@ -9,6 +9,7 @@
 #include <unordered_map> // map
 #include <queue> // min-heap
 #include <chrono> // 測速
+#include <optional> // for node queue parallel
 
 using namespace std;
 
@@ -34,7 +35,7 @@ public:
 #include <immintrin.h>
 
 // 平行化版本的 array elimination, 用 A_{ij} 消去行 j 的其他元素, 並將列 i 同除 A_{ij}, 使 A_{ij} = 1
-void fastArrayElimination(uint32_t cols, vector<double>& arr, uint32_t i, uint32_t j) { // arr 是扁平化的二維陣列
+void parallelArrayElimination(uint32_t cols, vector<double>& arr, uint32_t i, uint32_t j) { // arr 是扁平化的二維陣列
 	uint32_t rows = arr.size() / cols;
 	
 	const uint32_t simdWidth = 4; // 一次處理 4 個 double
@@ -239,7 +240,7 @@ private:
 		}
 		
 		void elimination(uint32_t i, uint32_t j) { // 用 A_{ij} 消去行 j 的其他元素, 並將列 i 同除 A_{ij}, 使 A_{ij} = 1
-			fastArrayElimination(cols, arr, i, j);
+			parallelArrayElimination(cols, arr, i, j);
 			return; // [debug] 目前正在嘗試加速, 所以跳過原始演算法
 			
 			const double aij = arr_(i, j);
@@ -618,8 +619,6 @@ public:
 	}
 	
 	void solve() { // 計算 IP 問題
-		printf("\n\n\n"); // 分隔用
-		
 		init(); // 生成初始 node 並 push 進 min-heap
 		
 		while (nodeQueue.size() > 0 && solutionType != Type::UNBOUNDED) { // min-heap 還有 node 就繼續分支, 目前 unbounded 會強制停下
@@ -633,6 +632,48 @@ public:
 		}
 		
 		extremum = objValueUpperBound * (isMin ? 1 : -1); // 極值
+	}
+	
+	void solveParallel() { // 計算 IP 問題 (node queue level parallel)
+		init();
+		
+		#pragma omp parallel  // 建立一個執行緒池
+		{
+			// 每個執行緒都會執行這個 while 迴圈
+			while (true) {
+				std::optional<Node> nodeOpt;
+				
+				// ========== 關鍵區域 1: 取出工作 ==========
+				#pragma omp critical  // 同一時間只有一個執行緒可以進入
+				{
+					if (nodeQueue.size() > 0 && solutionType != Type::UNBOUNDED) {
+						nodeOpt = nodeQueue.top();  // 取出優先度最高的 node
+						nodeQueue.pop();             // 從 queue 移除
+					}
+				}
+				// ==========================================
+				
+				if (!nodeOpt.has_value()) break;  // 沒工作了，結束
+				
+				Node& node = nodeOpt.value();
+				
+				// ========== 平行計算區域（不需要同步）==========
+				// 每個執行緒獨立計算自己的 LP 子問題
+				Node leftChildNode(objFunc, multiCon, node.varRangeLeft);   // 計算左子樹
+				Node rightChildNode(objFunc, multiCon, node.varRangeRight); // 計算右子樹
+				// ==========================================
+				
+				// ========== 關鍵區域 2: 更新結果 ==========
+				#pragma omp critical  // 同步更新共享資料
+				{
+					checkNode(leftChildNode);   // 可能更新 objValueUpperBound
+					checkNode(rightChildNode);  // 可能將新 node 加入 queue
+				}
+				// ==========================================
+			}
+		}
+		
+		extremum = objValueUpperBound * (isMin ? 1 : -1);
 	}
 	
 	void print_grouped_solution(bool show_zero = false) const {
@@ -799,11 +840,13 @@ int32_t main() {
 	SCParams P = default_sc_params(); // 取參數 (可在 sc_params.hpp 改 default_sc_params() 內容)
 	IP ip = build_supply_chain_ip(P); // 用參數建 IP 模型 (目標 + 限制)
 	
+	printf("\n\n\n"); // 分隔用 (因為 node queue size 訊息會 flush 掉兩行)
 	auto start = chrono::high_resolution_clock::now(); // 測速
-	ip.solve(); // 求 IP 的解, 並測速
+	// ip.solve(); // 求 IP 的解, 並測速
+	ip.solveParallel();
 	auto end = chrono::high_resolution_clock::now();
+	printf("\n"); // 分隔用
 	
-	printf("\n");
 	ip.print(false, false); // 印出 IP 的解
 	
 	double exeTimeMs = chrono::duration<double, milli>(end - start).count(); // 執行總時間 (ms)
