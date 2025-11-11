@@ -1,3 +1,4 @@
+#include <iostream> // std::flush
 #include <stdio.h> // printf
 #include <cstdint> // uint32_t
 #include <cmath>
@@ -564,8 +565,6 @@ private:
 	}
 	
 	void checkNode(Node& node) { // 檢查一個 node 的 solution type, 決定是否要更新全域上界或推入 min heap
-		printf("node queue size = %zu; ", nodeQueue.size()); node.print(bimap); // [debug]
-		
 		if (node.type == Node::Type::IP_FEASIBLE && node.lowerBound < objValueUpperBound) {
 			solutionType = Type::BOUNDED;
 			solution = node.solution; // 更新全域 IP 解
@@ -579,6 +578,15 @@ private:
 		} // [剪枝] 如果 node 無解, 無視它
 		
 		nodeSolvedCount++; // 解 LP 式子的次數與 check 次數相同
+		
+		// [WARNING] 因為這兩行會 flush 掉舊輸出, 如果要看 debug 訊息必須註解掉
+		cout << "\033[2A";   // 游標往上兩行
+		cout << "\033[2K\r"; // 清第一行
+		cout << "\rNode queue size = " << nodeQueue.size() << "\n";
+		cout << "\033[2K\r"; // 清第二行
+		printf("Number of LP nodes solved: %u", nodeSolvedCount);
+		cout << flush;
+		cout << "\n";
 	}
 
 public:
@@ -610,6 +618,8 @@ public:
 	}
 	
 	void solve() { // 計算 IP 問題
+		printf("\n\n\n"); // 分隔用
+		
 		init(); // 生成初始 node 並 push 進 min-heap
 		
 		while (nodeQueue.size() > 0 && solutionType != Type::UNBOUNDED) { // min-heap 還有 node 就繼續分支, 目前 unbounded 會強制停下
@@ -664,7 +674,7 @@ public:
 		print_group("U[", "Unmet demand (U[i,l]):");
 	}
 	
-	void print(bool showCon = false) {
+	void print(bool showCon = false, bool showGroupSolution = false) {
 		if (showCon) {
 			printf(isMin ? "min " : "max -> min ");
 			objFunc.print(bimap);
@@ -687,13 +697,13 @@ public:
 
 		printf("Number of LP nodes solved: %u\n", nodeSolvedCount);
 		
-		print_grouped_solution(true);
+		if (showGroupSolution) print_grouped_solution(true);
 	}
 };
 
 class Tester { // 有一些範例用來測試正確性
 private:
-	void printTime(double t) { // print 一個時間 (輸入 ns)
+	static void printTime(double t) { // print 一個時間 (輸入 ns)
 		if (t < 1e3) {
 			printf("%.f ns (1e-9 s)", t); return;
 		};
@@ -786,15 +796,22 @@ public:
 #include "sc_params.hpp"
 #include "sc_model.cpp"
 int32_t main() {
-	// 1) 取參數（可在 sc_params.hpp 改 default_sc_params() 內容）
-	SCParams P = default_sc_params();
-
-	// 2) 用參數建 IP 模型（目標 + 限制）
-	IP ip = build_supply_chain_ip(P);
-
-	// 3) 求解、印結果
-	ip.solve();
-	ip.print();
-
+	SCParams P = default_sc_params(); // 取參數 (可在 sc_params.hpp 改 default_sc_params() 內容)
+	IP ip = build_supply_chain_ip(P); // 用參數建 IP 模型 (目標 + 限制)
+	
+	auto start = chrono::high_resolution_clock::now(); // 測速
+	ip.solve(); // 求 IP 的解, 並測速
+	auto end = chrono::high_resolution_clock::now();
+	
+	printf("\n");
+	ip.print(false, false); // 印出 IP 的解
+	
+	double exeTimeMs = chrono::duration<double, milli>(end - start).count(); // 執行總時間 (ms)
+	printf("\n");
+	printf("---------- Execution Time Analysis ----------\n");
+	printf("Execution time: %.0f ms\n", exeTimeMs); // IP 運算耗費的時間 (ms)
+	printf("Avg. execution time per LP node: %.2f ms\n", exeTimeMs / ip.nodeSolvedCount); // IP 運算耗費的時間 (ms)
+	printf("---------- Execution Time Analysis ----------\n");
+	
 	return 0;
 }
