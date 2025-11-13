@@ -57,7 +57,7 @@ void parallelArrayElimination(uint32_t cols, vector<double>& arr, uint32_t i, ui
 		}
 		for (; c < cols; c++) ptrRowK[c] -= ptrRowI[c] * ratio; // 列 i 乘常數消去列 k
 		
-		ptrRowK[j] = 0; // 保證行 j 的其他元素被消去
+		// ptrRowK[j] = 0; // 保證行 j 的其他元素被消去
 	}
 	
 	const double aij = arr[cols * i + j];
@@ -621,7 +621,7 @@ public:
 	
 	void solve() { // 計算 IP 問題
 		init(); // 生成初始 node 並 push 進 min-heap
-		
+		cout << "Branch & Bound started...\n";
 		while (nodeQueue.size() > 0 && solutionType != Type::UNBOUNDED) { // min-heap 還有 node 就繼續分支, 目前 unbounded 會強制停下
 			Node node = nodeQueue.top(); // 取出下界較小的 node 比較容易找到更小的解
 			nodeQueue.pop();
@@ -637,7 +637,7 @@ public:
 	
 	void solveParallel() { // 計算 IP 問題 (node level parallel)
 		init();
-		
+		cout << "Parallel Branch & Bound started...\n";
 		#pragma omp parallel  // 建立一個執行緒池
 		{
 			// 每個執行緒都會執行這個 while 迴圈
@@ -838,8 +838,8 @@ public:
 #include "sc_params.hpp"
 #include "sc_model.cpp"
 int32_t main(int argc, char* argv[]) {
-	enableMatrixEliminationParallel = true; // 啟用矩陣列運算 avx256 向量化加速
-	bool enableNodeLevelParallel = false; // node queue 會一次 pop 多個 node 做平行化計算
+	enableMatrixEliminationParallel = false; // 啟用矩陣列運算 avx256 向量化加速
+	bool enableNodeLevelParallel = true; // node queue 會一次 pop 多個 node 做平行化計算
 	
 	SCParams P = default_sc_params(); // 取參數 (可在 sc_params.hpp 改 default_sc_params() 內容)
 	IP ip = build_supply_chain_ip(P); // 用參數建 IP 模型 (目標 + 限制)
@@ -850,7 +850,7 @@ int32_t main(int argc, char* argv[]) {
 	auto end = chrono::high_resolution_clock::now();
 	printf("\n"); // 分隔用
 	
-	ip.print(false, false); // 印出 IP 的解
+	ip.print(false, true); // 印出 IP 的解
 	
 	double exeTimeMs = chrono::duration<double, milli>(end - start).count(); // 執行總時間 (ms)
 	printf("\n");
