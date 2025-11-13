@@ -57,7 +57,7 @@ void parallelArrayElimination(uint32_t cols, vector<double>& arr, uint32_t i, ui
 		}
 		for (; c < cols; c++) ptrRowK[c] -= ptrRowI[c] * ratio; // 列 i 乘常數消去列 k
 		
-		// ptrRowK[j] = 0; // 保證行 j 的其他元素被消去
+		ptrRowK[j] = 0; // 保證行 j 的其他元素被消去
 	}
 	
 	const double aij = arr[cols * i + j];
