@@ -245,7 +245,10 @@ private:
 			}
 			
 			const double aij = arr_(i, j);
-			for (uint32_t k = 0; k < rows; k++) if (k != i) addRowToRow(i, k, -arr_(k, j) / aij); // 用 A_{ij} 消去行 j 的其他元素
+			for (uint32_t k = 0; k < rows; k++) {
+				if (k != i) addRowToRow(i, k, -arr_(k, j) / aij); // 用 A_{ij} 消去行 j 的其他元素
+				arr_(k, j) = 0;
+			}
 			scaleRow(i, aij); // 將列 i 同除 A_{ij}, 使 A_{ij} = 1
 		}
 		
