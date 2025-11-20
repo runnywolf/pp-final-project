@@ -635,63 +635,99 @@ public:
 		extremum = objValueUpperBound * (isMin ? 1 : -1); // 極值
 	}
 	
-	void solveParallel() {
-		init();
-		cout << "Parallel Branch & Bound started...\n";
-		
-		int activeWorkers = 0;  // 正在工作的執行緒數量
-		
-		#pragma omp parallel
+	// Optimize version: 並行 Branch & Bound（解決單核瓶頸）
+	void solveParallel() { 
+		init();  // 重設上下界、初始化 PQ
+
+		const int BATCH_SIZE = 8;     // 一次從 queue 中取多少工作（減少鎖競爭）
+		int activeThreads = 0;        // 目前正在處理工作的執行緒數（不是 idle）
+		bool isJobFinished = false;   // 全域終止旗標（所有工作結束後設 true）
+
+		#pragma omp parallel 
 		{
+			vector<Node> localBatch;        // 每個 thread 自己持有的一批工作
+			localBatch.reserve(BATCH_SIZE); // 避免頻繁 realloc
+
 			while (true) {
-				std::optional<Node> nodeOpt;
-				
-				// ========== 關鍵區域 1: 取出工作 ==========
+				localBatch.clear();
+
+				// ====================== (Critical 1) 領取工作 & 判斷是否結束 ======================
 				#pragma omp critical
 				{
-					if (nodeQueue.size() > 0 && solutionType != Type::UNBOUNDED) {
-						nodeOpt = nodeQueue.top();
-						nodeQueue.pop();
-						activeWorkers++;  // 拿到工作,計數+1
-					}
-				}
-				// ==========================================
-				
-				// 終止條件: Queue 空 且 沒有人在工作
-				if (!nodeOpt.has_value()) {
-					bool shouldExit = false;
-					#pragma omp critical
-					{
-						// 再次確認 (避免 race condition)
-						if (nodeQueue.empty() && activeWorkers == 0) {
-							shouldExit = true;
+					if (!isJobFinished) {
+
+						// 從全域 queue 取最多 BATCH_SIZE 個工作，存入 localBatch
+						int count = 0;
+						while (count < BATCH_SIZE && !nodeQueue.empty() && solutionType != Type::UNBOUNDED) {
+							localBatch.push_back(nodeQueue.top());
+							nodeQueue.pop();
+							count++;
+						}
+
+						if (!localBatch.empty()) {
+							// 成功取得工作 → 標記自己為忙碌
+							activeThreads++;
+						} else {
+							// 沒拿到工作，檢查是否所有人都 idle 且沒有新工作
+							if (activeThreads == 0) {
+								// 全部人沒事做 => 宣告全域結束
+								isJobFinished = true;
+							}
 						}
 					}
-					if (shouldExit) break;
-					
-					// 否則短暫等待,讓其他執行緒有機會產生新工作
-					#pragma omp taskyield  // 或用 std::this_thread::yield()
-					continue;
+					// 若 isJobFinished == true，就不再取工作（退出判斷由外層 while 控制）
 				}
-				
-				Node& node = nodeOpt.value();
-				
-				// ========== 平行計算區域 ==========
-				Node leftChildNode(objFunc, multiCon, node.varRangeLeft);
-				Node rightChildNode(objFunc, multiCon, node.varRangeRight);
-				// ==========================================
-				
-				// ========== 關鍵區域 2: 更新結果 ==========
+				// ================================================================================
+
+				// ========== 沒拿到工作 → 判斷是等待還是退出 ==========
+				if (localBatch.empty()) {
+					if (isJobFinished)
+						break;      // 已確定不會再有工作 → 離開 while
+					else
+						continue;   // 還有人在忙，等一下再來搶工作（spin-wait）
+				}
+				// ======================================================
+
+
+				// ================== 平行處理自己這批工作（無需鎖） ==================
+				for (Node& node : localBatch) {
+
+					// 剪枝條件：若已知界限沒意義，就跳過
+					if (solutionType == Type::BOUNDED && node.lowerBound >= objValueUpperBound) continue;
+					if (solutionType == Type::UNBOUNDED) break;
+
+					// 對 node 進行分支（產生左右子節點）
+					Node leftChildNode(objFunc, multiCon, node.varRangeLeft);
+					Node rightChildNode(objFunc, multiCon, node.varRangeRight);
+
+					// 寫回全域資料（最優解、queue 推新節點 etc.）→ 必須上鎖
+					#pragma omp critical
+					{
+						if (solutionType != Type::UNBOUNDED) {
+							checkNode(leftChildNode);
+							checkNode(rightChildNode);
+						}
+					}
+				}
+				// =================================================================
+
+
+				// ====================== (Critical 2) 回報完成、檢查是否終止 ======================
 				#pragma omp critical
 				{
-					checkNode(leftChildNode);
-					checkNode(rightChildNode);
-					activeWorkers--;  // 工作完成,計數-1
+					activeThreads--;  // 我這批工作做完 → 標記為 idle
+
+					// 若我完成後 queue 又是空的 → 表示沒有新節點產生
+					if (activeThreads == 0 && nodeQueue.empty()) {
+						// 我是最後離場的人 → 宣告結束
+						isJobFinished = true;
+					}
 				}
-				// ==========================================
+				// =================================================================
 			}
 		}
-		
+
+		// 回傳最終結果（依據是否是最小化調整符號）
 		extremum = objValueUpperBound * (isMin ? 1 : -1);
 	}
 	
