@@ -635,40 +635,58 @@ public:
 		extremum = objValueUpperBound * (isMin ? 1 : -1); // 極值
 	}
 	
-	void solveParallel() { // 計算 IP 問題 (node level parallel)
+	void solveParallel() {
 		init();
 		cout << "Parallel Branch & Bound started...\n";
-		#pragma omp parallel  // 建立一個執行緒池
+		
+		int activeWorkers = 0;  // 正在工作的執行緒數量
+		
+		#pragma omp parallel
 		{
-			// 每個執行緒都會執行這個 while 迴圈
 			while (true) {
 				std::optional<Node> nodeOpt;
 				
 				// ========== 關鍵區域 1: 取出工作 ==========
-				#pragma omp critical  // 同一時間只有一個執行緒可以進入
+				#pragma omp critical
 				{
 					if (nodeQueue.size() > 0 && solutionType != Type::UNBOUNDED) {
-						nodeOpt = nodeQueue.top();  // 取出優先度最高的 node
-						nodeQueue.pop();             // 從 queue 移除
+						nodeOpt = nodeQueue.top();
+						nodeQueue.pop();
+						activeWorkers++;  // 拿到工作,計數+1
 					}
 				}
 				// ==========================================
 				
-				if (!nodeOpt.has_value()) break;  // 沒工作了，結束
+				// 終止條件: Queue 空 且 沒有人在工作
+				if (!nodeOpt.has_value()) {
+					bool shouldExit = false;
+					#pragma omp critical
+					{
+						// 再次確認 (避免 race condition)
+						if (nodeQueue.empty() && activeWorkers == 0) {
+							shouldExit = true;
+						}
+					}
+					if (shouldExit) break;
+					
+					// 否則短暫等待,讓其他執行緒有機會產生新工作
+					#pragma omp taskyield  // 或用 std::this_thread::yield()
+					continue;
+				}
 				
 				Node& node = nodeOpt.value();
 				
-				// ========== 平行計算區域（不需要同步）==========
-				// 每個執行緒獨立計算自己的 LP 子問題
-				Node leftChildNode(objFunc, multiCon, node.varRangeLeft);   // 計算左子樹
-				Node rightChildNode(objFunc, multiCon, node.varRangeRight); // 計算右子樹
+				// ========== 平行計算區域 ==========
+				Node leftChildNode(objFunc, multiCon, node.varRangeLeft);
+				Node rightChildNode(objFunc, multiCon, node.varRangeRight);
 				// ==========================================
 				
 				// ========== 關鍵區域 2: 更新結果 ==========
-				#pragma omp critical  // 同步更新共享資料
+				#pragma omp critical
 				{
-					checkNode(leftChildNode);   // 可能更新 objValueUpperBound
-					checkNode(rightChildNode);  // 可能將新 node 加入 queue
+					checkNode(leftChildNode);
+					checkNode(rightChildNode);
+					activeWorkers--;  // 工作完成,計數-1
 				}
 				// ==========================================
 			}
