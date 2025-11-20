@@ -681,7 +681,7 @@ public:
 			}
 		}
 		
-		extremum = objValueUpperBound * (isMin ? 1 : -1); // 因為
+		extremum = objValueUpperBound * (isMin ? 1 : -1); // 因為有將 max 問題轉為 min 問題, 極值要記得變號
 	}
 	
 	void print_grouped_solution(bool show_zero = false) const {
