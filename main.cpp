@@ -3,7 +3,7 @@
 #include <cstdint> // uint32_t
 #include <cmath>
 #include <string>
-#include <algorithm>   // for std::sort
+#include <algorithm> // for std::sort
 #include <limits> // fp64 inf, nan
 #include <vector>
 #include <unordered_map> // map
@@ -588,7 +588,7 @@ private:
 		nodeSolvedCount++; // 解 LP 式子的次數與 check 次數相同
 		
 		// [WARNING] 因為這兩行會 flush 掉舊輸出, 如果要看 debug 訊息必須註解掉
-		cout << "\033[2A";   // 游標往上兩行
+		cout << "\033[2A"; // 游標往上兩行
 		cout << "\033[2K\r"; // 清第一行
 		cout << "\rNode queue size = " << nodeQueue.size() << "\n";
 		cout << "\033[2K\r"; // 清第二行
@@ -633,8 +633,8 @@ public:
 			nodeQueue.pop();
 			
 			Node leftChildNode(objFunc, multiCon, node.varRangeLeft); // 生成並計算左子節點的 LP 問題
-			checkNode(leftChildNode); // 檢查 child node 的解
 			Node rightChildNode(objFunc, multiCon, node.varRangeRight); // 生成並計算右子節點的 LP 問題
+			checkNode(leftChildNode); // 檢查 child node 的解
 			checkNode(rightChildNode);
 		}
 		
@@ -642,45 +642,46 @@ public:
 	}
 	
 	void solveParallel() { // 計算 IP 問題 (node level parallel)
-		init();
+		init(); // 生成初始 node 並 push 進 min-heap
 		
-		#pragma omp parallel  // 建立一個執行緒池
+		uint32_t workingThreadCount = 0; // 正在計算中的 thread
+		
+		#pragma omp parallel // 建立一個執行緒池
 		{
-			// 每個執行緒都會執行這個 while 迴圈
-			while (true) {
-				std::optional<Node> nodeOpt;
+			optional<Node> nodeOpt;
+			
+			while (true) { // 不斷 busy waiting
+				if (solutionType == Type::UNBOUNDED) break; // 如果有 node 的 LP 解出現 unbounded 會強制停下
 				
-				// ========== 關鍵區域 1: 取出工作 ==========
-				#pragma omp critical  // 同一時間只有一個執行緒可以進入
+				bool hasNode = false;
+				bool wait = false;
+				#pragma omp critical // 同一時間只有一個執行緒可以嘗試從 queue 取出 node
 				{
-					if (nodeQueue.size() > 0 && solutionType != Type::UNBOUNDED) {
-						nodeOpt = nodeQueue.top();  // 取出優先度最高的 node
-						nodeQueue.pop();             // 從 queue 移除
+					if (nodeQueue.size() > 0) {
+						nodeOpt = nodeQueue.top(); // 取出下界較小的 node 比較容易找到更小的解
+						nodeQueue.pop();
+						workingThreadCount++; // 表示自己 (thread) 正在工作
+						hasNode = true;
 					}
+					else if (workingThreadCount > 0) wait = true;
 				}
-				// ==========================================
+				if (!hasNode && wait) continue; // node queue 是空的, 但還有 thread 還在計算, 就 busy waiting
+				if (!hasNode && !wait) break; // nodeQueue 是空的, 並且沒有 thread 在計算, 代表 node tree 已遍歷完畢
 				
-				if (!nodeOpt.has_value()) break;  // 沒工作了，結束
-				
-				Node& node = nodeOpt.value();
-				
-				// ========== 平行計算區域（不需要同步）==========
 				// 每個執行緒獨立計算自己的 LP 子問題
-				Node leftChildNode(objFunc, multiCon, node.varRangeLeft);   // 計算左子樹
-				Node rightChildNode(objFunc, multiCon, node.varRangeRight); // 計算右子樹
-				// ==========================================
+				Node leftChildNode(objFunc, multiCon, nodeOpt.value().varRangeLeft); // 計算左子樹 (left node)
+				Node rightChildNode(objFunc, multiCon, nodeOpt.value().varRangeRight); // 計算右子樹 (right node)
 				
-				// ========== 關鍵區域 2: 更新結果 ==========
-				#pragma omp critical  // 同步更新共享資料
+				#pragma omp critical // 同一時間只有一個執行緒可以將 node 推入 queue, 修改 workingThreadCount 和 objValueUpperBound
 				{
-					checkNode(leftChildNode);   // 可能更新 objValueUpperBound
-					checkNode(rightChildNode);  // 可能將新 node 加入 queue
+					checkNode(leftChildNode); // 檢查左右子樹的 node 的 LP 解, 決定是否要更新全域上界或推入 node queue
+					checkNode(rightChildNode);
+					workingThreadCount--; // 工作做完, 計數 -1
 				}
-				// ==========================================
 			}
 		}
 		
-		extremum = objValueUpperBound * (isMin ? 1 : -1);
+		extremum = objValueUpperBound * (isMin ? 1 : -1); // 因為
 	}
 	
 	void print_grouped_solution(bool show_zero = false) const {
@@ -845,7 +846,7 @@ public:
 #include "sc_model.cpp"
 int32_t main(int argc, char* argv[]) {
 	enableMatrixEliminationParallel = true; // 啟用矩陣列運算 avx256 向量化加速
-	bool enableNodeLevelParallel = false; // node queue 會一次 pop 多個 node 做平行化計算
+	bool enableNodeLevelParallel = true; // node queue 會一次 pop 多個 node 做平行化計算
 	
 	SCParams P = default_sc_params(); // 取參數 (可在 sc_params.hpp 改 default_sc_params() 內容)
 	IP ip = build_supply_chain_ip(P); // 用參數建 IP 模型 (目標 + 限制)
