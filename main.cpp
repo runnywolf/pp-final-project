@@ -577,10 +577,10 @@ private:
 			solutionType = Type::BOUNDED;
 			solution = node.solution; // 更新全域 IP 解
 			objValueUpperBound = node.lowerBound; // [剪枝] 如果 node 有整數解向量, 並且比現有的解更好, 更新全域上界, 不用繼續往下尋找
-		}
-		else if (node.type == Node::Type::LP_FEASIBLE) { // 如果 node 有浮點解向量
-			if (node.lowerBound < objValueUpperBound) nodeQueue.push(node); // 將 root node push 進 min-heap (繼續往下搜尋)
-		} // [剪枝] "node 下界 >= 全域上界" 的分支不用計算, 因為無法取得更好的結果
+		} // [剪枝] 如果 node 有整數解向量, 沒有比現有的解更好, 無視
+		else if (node.type == Node::Type::LP_FEASIBLE && node.lowerBound < objValueUpperBound) { // 如果 node 有浮點解向量
+			nodeQueue.push(node); // 將 root node push 進 min-heap (繼續往下搜尋)
+		} // [剪枝] "node 下界 >= 全域上界" 的分支不用繼續往下搜尋, 因為無法取得更好的結果
 		else if (node.type == Node::Type::UNBOUNDED) { // 如果 node 無界
 			solutionType = Type::UNBOUNDED; // 停止計算 IP
 		} // [剪枝] 如果 node 無解, 無視它
@@ -654,29 +654,28 @@ public:
 				if (solutionType == Type::UNBOUNDED) break; // 如果有 node 的 LP 解出現 unbounded 會強制停下
 				
 				bool hasNode = false;
-				bool wait = false;
+				bool hasActiveThread = false;
 				#pragma omp critical // 同一時間只有一個執行緒可以嘗試從 queue 取出 node
 				{
-					if (nodeQueue.size() > 0) {
+					while (nodeQueue.size() > 0) {
 						nodeOpt = nodeQueue.top(); // 取出下界較小的 node 比較容易找到更小的解
 						nodeQueue.pop();
-						// 提早剪枝，如果 node 的下界已經不比全域上界更好，丟棄這個 node
-						if (nodeOpt.value().lowerBound >= objValueUpperBound) {
-							nodeOpt.reset();  // 丟棄這個 node
-							hasNode = false;
-						} else {
+						
+						if (nodeOpt.value().lowerBound < objValueUpperBound) { // 在 critical section 不斷嘗試取出一個 "node 下界 < 全域上界" 的 node
 							workingThreadCount++;
 							hasNode = true;
+							break;
 						}
 					}
-					else if (workingThreadCount > 0) wait = true;
+					if (workingThreadCount > 0) hasActiveThread = true;
 				}
-				if (!hasNode && wait) continue; // node queue 是空的, 但還有 thread 還在計算, 就 busy waiting
-				if (!hasNode && !wait) break; // nodeQueue 是空的, 並且沒有 thread 在計算, 代表 node tree 已遍歷完畢
+				if (!hasNode && hasActiveThread) continue; // node queue 是空的, 但還有 thread 還在計算, 就 busy waiting
+				if (!hasNode && !hasActiveThread) break; // node queue 是空的, 並且沒有 thread 在計算, 代表 node tree 已遍歷完畢
 				
 				// 每個執行緒獨立計算自己的 LP 子問題
-				Node leftChildNode(objFunc, multiCon, nodeOpt.value().varRangeLeft); // 計算左子樹 (left node)
-				Node rightChildNode(objFunc, multiCon, nodeOpt.value().varRangeRight); // 計算右子樹 (right node)
+				Node& node = nodeOpt.value();
+				Node leftChildNode(objFunc, multiCon, node.varRangeLeft); // 計算左子樹 (left node)
+				Node rightChildNode(objFunc, multiCon, node.varRangeRight); // 計算右子樹 (right node)
 				
 				#pragma omp critical // 同一時間只有一個執行緒可以將 node 推入 queue, 修改 workingThreadCount 和 objValueUpperBound
 				{
@@ -868,8 +867,8 @@ int32_t main(int argc, char* argv[]) {
 	double exeTimeMs = chrono::duration<double, milli>(end - start).count(); // 執行總時間 (ms)
 	printf("\n");
 	printf("---------- Execution Time Analysis ----------\n");
-	printf("Execution time: %.0f ms\n", exeTimeMs); // IP 運算耗費的時間 (ms)
-	printf("Avg. execution time per LP node: %.2f ms\n", exeTimeMs / ip.nodeSolvedCount); // IP 運算耗費的時間 (ms)
+	printf(" Execution time: %.0f ms\n", exeTimeMs); // IP 運算耗費的時間 (ms)
+	printf(" Avg. execution time per LP node: %.3f ms\n", exeTimeMs / ip.nodeSolvedCount); // IP 運算耗費的時間 (ms)
 	printf("---------- Execution Time Analysis ----------\n");
 	
 	return 0;
