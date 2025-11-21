@@ -1,7 +1,12 @@
 # 2025 NYCU Parallel Programming Final Project
-Need `c++17`
+Author:
+[@homer40214](https://github.com/homer40214)
+[@Jerry0223](https://github.com/Jerry0223)
+[@runnywolf](https://github.com/runnywolf)
 
 ## How to run
+Need `c++17`
+
 Login `<username>@hpclogin[01~03].cs.nycu.edu.tw`
 
 Then
@@ -12,7 +17,7 @@ cd pp-final-project
 
 Run
 ```sh
-make clean && make && ./main.out
+make && ./main.out
 ```
 
 
