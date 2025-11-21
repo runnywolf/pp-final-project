@@ -660,8 +660,14 @@ public:
 					if (nodeQueue.size() > 0) {
 						nodeOpt = nodeQueue.top(); // 取出下界較小的 node 比較容易找到更小的解
 						nodeQueue.pop();
-						workingThreadCount++; // 表示自己 (thread) 正在工作
-						hasNode = true;
+						// 提早剪枝，如果 node 的下界已經不比全域上界更好，丟棄這個 node
+						if (nodeOpt.value().lowerBound >= objValueUpperBound) {
+							nodeOpt.reset();  // 丟棄這個 node
+							hasNode = false;
+						} else {
+							workingThreadCount++;
+							hasNode = true;
+						}
 					}
 					else if (workingThreadCount > 0) wait = true;
 				}
@@ -848,7 +854,7 @@ int32_t main(int argc, char* argv[]) {
 	enableMatrixEliminationParallel = true; // 啟用矩陣列運算 avx256 向量化加速
 	bool enableNodeLevelParallel = true; // node queue 會一次 pop 多個 node 做平行化計算
 	
-	SCParams P = default_sc_params(); // 取參數 (可在 sc_params.hpp 改 default_sc_params() 內容)
+	SCParams P = default_sc_params(5, 3, 2, 4); // 取參數 (可在 sc_params.hpp 改 default_sc_params() 內容)
 	IP ip = build_supply_chain_ip(P); // 用參數建 IP 模型 (目標 + 限制)
 	
 	printf("\n\n\n"); // 分隔用 (因為 node queue size 訊息會 flush 掉兩行)
