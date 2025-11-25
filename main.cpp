@@ -563,6 +563,9 @@ private:
 	priority_queue<Node, vector<Node>, Node::cmp> nodeQueue; // 以 float LP 下界排序的 min-heap, 先展開下界較小的 node 比較容易找到更小的解
 	double objValueUpperBound = FP64_INF; // 因為是求 min IP 問題, 所以有一個全域上界
 	
+	uint32_t nodeSolvedCount = 0; // [debug 變數] 計算了幾次 LP 問題
+	int64_t lastTimePrintNodeInfo = getSystemTimeSec(); // [debug 變數] 上一次印出 node queue 資訊的時間
+	
 	void init() { // 初始化 IP 問題
 		if (!isMin) objFunc.negate(); // 將 max 問題轉為 min 問題, 只需要將目標函數變號即可
 		
@@ -587,14 +590,16 @@ private:
 		
 		nodeSolvedCount++; // 解 LP 式子的次數與 check 次數相同
 		
-		// [WARNING] 因為這兩行會 flush 掉舊輸出, 如果要看 debug 訊息必須註解掉
-		cout << "\033[2A"; // 游標往上兩行
-		cout << "\033[2K\r"; // 清第一行
-		cout << "\rNode queue size = " << nodeQueue.size() << "\n";
-		cout << "\033[2K\r"; // 清第二行
-		printf("Number of LP nodes solved: %u", nodeSolvedCount);
-		cout << flush;
-		cout << "\n";
+		const int64_t systemTimeNowSec = getSystemTimeSec();
+		if (systemTimeNowSec != lastTimePrintNodeInfo) { // 如果時間戳改變, print 一次 node 資訊
+			lastTimePrintNodeInfo = systemTimeNowSec;
+			printf("[ Node queue size = %d | %d LP nodes solved ]\n", nodeQueue.size(), nodeSolvedCount);
+		}
+	}
+	
+	int64_t getSystemTimeSec() { // 獲取目前系統時間戳 (sec)
+		const auto epochTime = chrono::system_clock::now().time_since_epoch();
+		return chrono::duration_cast<chrono::seconds>(epochTime).count();
 	}
 
 public:
@@ -603,8 +608,6 @@ public:
 	Type solutionType = Type::INFEASIBLE; // 預設是無解, 如果有發現 IP 解會修改此值
 	vector<double> solution; // 全域 IP 解向量
 	double extremum; // min/max 極值
-	
-	uint32_t nodeSolvedCount = 0; // 計算了幾次 LP 問題 (debug)
 	
 	IP(const string& mode, vector<pair<double, string>> terms) { // 宣告 min/max 和目標函數
 		isMin = mode == "min"; // min/max
@@ -689,6 +692,10 @@ public:
 		extremum = objValueUpperBound * (isMin ? 1 : -1); // 因為有將 max 問題轉為 min 問題, 極值要記得變號
 	}
 	
+	uint32_t getNodeSolvedCount() {
+		return nodeSolvedCount;
+	}
+	
 	void print_grouped_solution(bool show_zero = false) const {
 		struct Item { std::string name; double val; };
 		std::vector<Item> items;
@@ -761,10 +768,10 @@ int32_t main(int argc, char* argv[]) {
 	enableMatrixEliminationParallel = true; // 啟用矩陣列運算 avx256 向量化加速
 	bool enableNodeLevelParallel = true; // node queue 會一次 pop 多個 node 做平行化計算
 	
-	SCParams P = default_sc_params(5, 3, 2, 4); // 取參數 (可在 sc_params.hpp 改 default_sc_params() 內容)
+	SCParams P = default_sc_params(3, 2, 2, 2); // 取參數 (可在 sc_params.hpp 改 default_sc_params() 內容)
 	IP ip = build_supply_chain_ip(P); // 用參數建 IP 模型 (目標 + 限制)
 	
-	printf("\n\n\n"); // 分隔用 (因為 node queue size 訊息會 flush 掉兩行)
+	printf("\n"); // 分隔用
 	auto start = chrono::high_resolution_clock::now(); // 測速
 	enableNodeLevelParallel ? ip.solveParallel() : ip.solve();
 	auto end = chrono::high_resolution_clock::now();
@@ -776,7 +783,7 @@ int32_t main(int argc, char* argv[]) {
 	printf("\n");
 	printf("---------- Execution Time Analysis ----------\n");
 	printf(" Execution time: %.0f ms\n", exeTimeMs); // IP 運算耗費的時間 (ms)
-	printf(" Avg. execution time per LP node: %.3f ms\n", exeTimeMs / ip.nodeSolvedCount); // IP 運算耗費的時間 (ms)
+	printf(" Avg. execution time per LP node: %.3f ms\n", exeTimeMs / ip.getNodeSolvedCount()); // IP 運算耗費的時間 (ms)
 	printf("---------- Execution Time Analysis ----------\n");
 	
 	return 0;
