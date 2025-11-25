@@ -590,6 +590,7 @@ private:
 		
 		nodeSolvedCount++; // 解 LP 式子的次數與 check 次數相同
 		
+		return; // [testing] 目前禁用 print node info
 		const int64_t systemTimeNowSec = getSystemTimeSec();
 		if (systemTimeNowSec != lastTimePrintNodeInfo) { // 如果時間戳改變, print 一次 node 資訊
 			lastTimePrintNodeInfo = systemTimeNowSec;
@@ -764,27 +765,57 @@ public:
 
 #include "sc_params.hpp"
 #include "sc_model.cpp"
+class Tester { // 測速
+private:
+	int i, j, k, l;
+
+public:
+	Tester(int i, int j, int k, int l): i(i), j(j), k(k), l(l) {}
+	
+	pair<double, uint32_t> testOneIP(bool avx2MRO, bool nodeOmp) {
+		enableMatrixEliminationParallel = avx2MRO; // 啟用矩陣列運算 avx256 向量化加速
+		bool enableNodeLevelParallel = nodeOmp; // node queue 會一次 pop 多個 node 做平行化計算
+		
+		SCParams P = default_sc_params(i, j, k, l); // 取參數 (可在 sc_params.hpp 改 default_sc_params() 內容)
+		IP ip = build_supply_chain_ip(P); // 用參數建 IP 模型 (目標 + 限制)
+		
+		auto start = chrono::high_resolution_clock::now(); // 測速
+		enableNodeLevelParallel ? ip.solveParallel() : ip.solve();
+		auto end = chrono::high_resolution_clock::now();
+		
+		double exeTimeMs = chrono::duration<double, milli>(end - start).count(); // 執行總時間 (ms)
+		return { exeTimeMs, ip.getNodeSolvedCount() };
+	}
+	
+	void test(uint32_t n, bool avx2MRO, bool nodeOmp) {
+		cout << "\nSolved IP problem count: " << flush; // 分隔用
+		
+		double exeTimeMsSum = 0;
+		uint32_t nodeSolvedCountSum = 0;
+		for (uint32_t a = 0; a < n; a++) {
+			auto [exeTimeMs, nodeSolvedCount] = testOneIP(avx2MRO, nodeOmp);
+			exeTimeMsSum += exeTimeMs;
+			nodeSolvedCountSum += nodeSolvedCount;
+			cout << "*" << flush;
+		}
+		printf("\n");
+		
+		printf("---------- Execution Time Analysis ----------\n");
+		printf(" Test %d IP problem; avx2=%d; omp=%d\n", n, avx2MRO, nodeOmp);
+		printf(" Execution time: %.3f ms\n", exeTimeMsSum / n); // IP 運算耗費的時間 (ms)
+		printf(" Avg. execution time per LP node: %.3f ms\n", exeTimeMsSum / nodeSolvedCountSum); // IP 運算耗費的時間 (ms)
+		printf("---------- Execution Time Analysis ----------\n");
+	}
+};
+
 int32_t main(int argc, char* argv[]) {
-	enableMatrixEliminationParallel = true; // 啟用矩陣列運算 avx256 向量化加速
-	bool enableNodeLevelParallel = true; // node queue 會一次 pop 多個 node 做平行化計算
+	uint32_t n = 100;
 	
-	SCParams P = default_sc_params(3, 2, 2, 2); // 取參數 (可在 sc_params.hpp 改 default_sc_params() 內容)
-	IP ip = build_supply_chain_ip(P); // 用參數建 IP 模型 (目標 + 限制)
-	
-	printf("\n"); // 分隔用
-	auto start = chrono::high_resolution_clock::now(); // 測速
-	enableNodeLevelParallel ? ip.solveParallel() : ip.solve();
-	auto end = chrono::high_resolution_clock::now();
-	printf("\n"); // 分隔用
-	
-	ip.print(false, false); // 印出 IP 的解
-	
-	double exeTimeMs = chrono::duration<double, milli>(end - start).count(); // 執行總時間 (ms)
-	printf("\n");
-	printf("---------- Execution Time Analysis ----------\n");
-	printf(" Execution time: %.0f ms\n", exeTimeMs); // IP 運算耗費的時間 (ms)
-	printf(" Avg. execution time per LP node: %.3f ms\n", exeTimeMs / ip.getNodeSolvedCount()); // IP 運算耗費的時間 (ms)
-	printf("---------- Execution Time Analysis ----------\n");
+	Tester tester(3, 3, 3, 3);
+	tester.test(n, false, false);
+	tester.test(n, true, false);
+	tester.test(n, false, true);
+	tester.test(n, true, true);
 	
 	return 0;
 }
