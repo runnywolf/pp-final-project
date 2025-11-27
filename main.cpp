@@ -772,7 +772,7 @@ private:
 public:
 	Tester(int i, int j, int k, int l): i(i), j(j), k(k), l(l) {}
 	
-	pair<double, uint32_t> testOneIP(bool avx2MRO, bool nodeOmp) {
+	pair<double, uint32_t> testOneIP(bool avx2MRO, bool nodeOmp) { // 測試單個 IP 問題的耗時和 LP node 解決數
 		enableMatrixEliminationParallel = avx2MRO; // 啟用矩陣列運算 avx256 向量化加速
 		bool enableNodeLevelParallel = nodeOmp; // node queue 會一次 pop 多個 node 做平行化計算
 		
@@ -787,8 +787,9 @@ public:
 		return { exeTimeMs, ip.getNodeSolvedCount() };
 	}
 	
-	void test(uint32_t n, bool avx2MRO, bool nodeOmp) {
-		cout << "\nSolved IP problem count: " << flush; // 分隔用
+	pair<double, double> testParallel(uint32_t n, bool avx2MRO, bool nodeOmp) { // 測試 n 次同一個 IP 問題, 回傳平均耗時和平均 node 數
+		printf("Solved IP problem count (avx2=%d omp=%d): ", avx2MRO, nodeOmp);
+		cout << flush; // 分隔用
 		
 		double exeTimeMsSum = 0;
 		uint32_t nodeSolvedCountSum = 0;
@@ -798,24 +799,39 @@ public:
 			nodeSolvedCountSum += nodeSolvedCount;
 			cout << "*" << flush;
 		}
-		printf("\n");
+		cout << endl;
+		return { exeTimeMsSum / n, (double)nodeSolvedCountSum / n };
+	}
+	
+	void test(uint32_t n) {
+		auto [avgExeTimeMs_00, avgNodeSolvedCount] = testParallel(n, false, false);
+		auto [avgExeTimeMs_10, _] = testParallel(n, true, false);
+		auto [avgExeTimeMs_11, __] = testParallel(n, true, true);
+		double avx2SpeedUp = avgExeTimeMs_00 / avgExeTimeMs_10; // avx2 matrix row operation speedup
+		double ompSpeedUp = avgExeTimeMs_10 / avgExeTimeMs_11; // omp node level parallel speedup
 		
-		printf("---------- Execution Time Analysis ----------\n");
-		printf(" Test %d IP problem; avx2=%d; omp=%d\n", n, avx2MRO, nodeOmp);
-		printf(" Execution time: %.3f ms\n", exeTimeMsSum / n); // IP 運算耗費的時間 (ms)
-		printf(" Avg. execution time per LP node: %.3f ms\n", exeTimeMsSum / nodeSolvedCountSum); // IP 運算耗費的時間 (ms)
-		printf("---------- Execution Time Analysis ----------\n");
+		printf("---------- Tester ----------\n");
+		printf(" IP problem - Model parameters: (%d, %d, %d, %d)\n", i, j, k, l);
+		printf(" Running %d IP problems\n", n);
+		printf(" OpenMP max threads: %d\n", omp_get_max_threads());
+		printf("----------------------------\n");
+		printf(" Average LP nodes solved per IP problem: %.0f\n", avgNodeSolvedCount);
+		printf(" [AVX2: OFF, OMP: OFF] %.3f ms/IPprob\n", avgExeTimeMs_00);
+		printf(
+			" [AVX2: ON , OMP: OFF] %.3f ms/IPprob | AVX2 matrix row operation speedup: x %.2f (%.2f %)\n",
+			avgExeTimeMs_10, avx2SpeedUp, avx2SpeedUp / 4 * 100
+		);
+		printf(
+			" [AVX2: ON , OMP: ON ] %.3f ms/IPprob | OpenMP node-level parallel speedup: x %.2f (%.2f %)\n",
+			avgExeTimeMs_11, ompSpeedUp, ompSpeedUp / omp_get_max_threads() * 100
+		);
+		printf("---------- Tester ----------\n");
 	}
 };
 
 int32_t main(int argc, char* argv[]) {
-	uint32_t n = 100;
-	
 	Tester tester(3, 3, 3, 3);
-	tester.test(n, false, false);
-	tester.test(n, true, false);
-	tester.test(n, false, true);
-	tester.test(n, true, true);
+	tester.test(10);
 	
 	return 0;
 }
