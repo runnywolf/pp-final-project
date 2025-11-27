@@ -594,7 +594,7 @@ private:
 		const int64_t systemTimeNowSec = getSystemTimeSec();
 		if (systemTimeNowSec != lastTimePrintNodeInfo) { // 如果時間戳改變, print 一次 node 資訊
 			lastTimePrintNodeInfo = systemTimeNowSec;
-			printf("[ Node queue size = %d | %d LP nodes solved ]\n", nodeQueue.size(), nodeSolvedCount);
+			printf("[ Node queue size = %d | %d LP nodes solved ]\n", (uint32_t)nodeQueue.size(), nodeSolvedCount);
 		}
 	}
 	
@@ -810,22 +810,22 @@ public:
 		double avx2SpeedUp = avgExeTimeMs_00 / avgExeTimeMs_10; // avx2 matrix row operation speedup
 		double ompSpeedUp = avgExeTimeMs_10 / avgExeTimeMs_11; // omp node level parallel speedup
 		
-		printf("---------- Tester ----------\n");
+		printf("-------------------- Tester --------------------\n");
 		printf(" IP problem - Model parameters: (%d, %d, %d, %d)\n", i, j, k, l);
 		printf(" Running %d IP problems\n", n);
 		printf(" OpenMP max threads: %d\n", omp_get_max_threads());
-		printf("----------------------------\n");
+		printf("------------------------------------------------\n");
 		printf(" Average LP nodes solved per IP problem: %.0f\n", avgNodeSolvedCount);
 		printf(" [AVX2: OFF, OMP: OFF] %.3f ms/IPprob\n", avgExeTimeMs_00);
 		printf(
-			" [AVX2: ON , OMP: OFF] %.3f ms/IPprob | AVX2 matrix row operation speedup: x %.2f (%.2f %)\n",
+			" [AVX2: ON , OMP: OFF] %.3f ms/IPprob | AVX2 matrix row operation speedup: x %.2f (%.2f %%)\n",
 			avgExeTimeMs_10, avx2SpeedUp, avx2SpeedUp / 4 * 100
 		);
 		printf(
-			" [AVX2: ON , OMP: ON ] %.3f ms/IPprob | OpenMP node-level parallel speedup: x %.2f (%.2f %)\n",
+			" [AVX2: ON , OMP: ON ] %.3f ms/IPprob | OpenMP node-level parallel speedup: x %.2f (%.2f %%)\n",
 			avgExeTimeMs_11, ompSpeedUp, ompSpeedUp / omp_get_max_threads() * 100
 		);
-		printf("---------- Tester ----------\n");
+		printf("-------------------- Tester --------------------\n");
 	}
 };
 
