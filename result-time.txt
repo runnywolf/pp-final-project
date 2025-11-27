@@ -4,3 +4,4 @@ Running 100 IP problems
 |                 CPU | OMP threads |  single  |   AVX2   | AVX2+OMP |
 | ------------------- | ----------- | -------- | -------- | -------- |
 | Intel Ultra 7 265KF |          20 |   279.74 |    98.52 |     9.28 | (ms/IPprob)
+|     Intel i9-13900K |          32 |   351.62 |   113.55 |    12.89 |

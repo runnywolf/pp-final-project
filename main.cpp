@@ -831,7 +831,7 @@ public:
 
 int32_t main(int argc, char* argv[]) {
 	Tester tester(3, 3, 3, 3);
-	tester.test(10);
+	tester.test(100);
 	
 	return 0;
 }
